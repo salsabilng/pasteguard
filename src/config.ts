@@ -32,6 +32,28 @@ const CodexProviderSchema = z.object({
 
 const DEFAULT_WHITELIST = ["You are Claude Code, Anthropic's official CLI for Claude."];
 
+const ContextEnrichmentEntitySchema = z.object({
+  description: z.string(),
+  fields: z.record(z.string()).default({}),
+  prefix_chars: z.coerce.number().int().min(0).max(10).optional(),
+  suffix_chars: z.coerce.number().int().min(0).max(10).optional(),
+});
+
+const ContextEnrichmentSchema = z.object({
+  enabled: z.boolean().default(false),
+  system_prompt: z
+    .string()
+    .default(
+      'The following placeholders represent redacted sensitive entities.\n' +
+        'Use this metadata to understand context without needing original values.\n\n{{entities}}\n',
+    ),
+  entities: z.record(ContextEnrichmentEntitySchema).default({}),
+  default: ContextEnrichmentEntitySchema.default({
+    description: 'a redacted {{type}} entity',
+    fields: { length: '{{length}}' },
+  }),
+});
+
 const MaskingSchema = z.object({
   show_markers: z.boolean().default(false),
   marker_text: z.string().default("[protected]"),
@@ -39,6 +61,7 @@ const MaskingSchema = z.object({
     .array(z.string())
     .default([])
     .transform((arr) => [...DEFAULT_WHITELIST, ...arr]),
+  context_enrichment: ContextEnrichmentSchema.default({}),
 });
 
 const LanguageEnum = z.enum(SUPPORTED_LANGUAGES);

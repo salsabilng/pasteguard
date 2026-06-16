@@ -54,6 +54,44 @@ masking:
   # whitelist:
   #   - "Company Name Inc."
 
+  # Context enrichment - inject entity metadata as system prompt
+  # Gives the LLM context about what each placeholder represents
+  context_enrichment:
+    enabled: false
+    # system_prompt: |
+    #   The following placeholders represent redacted sensitive entities.
+    #   Use this metadata to understand context without needing original values.
+    #
+    #   {{entities}}
+    #
+    # Per-entity metadata (optional, overrides default)
+    # Available template variables:
+    #   {{length}}      - character count
+    #   {{word_count}}  - number of words
+    #   {{type}}        - entity type name
+    #   {{score}}       - confidence score
+    #   {{domain}}      - email domain (empty if not email)
+    #   {{prefix}}      - first N chars (set prefix_chars)
+    #   {{suffix}}      - last N chars (set suffix_chars)
+    #   {{char_set}}    - character classes present
+    #   {{slice:START:END}} - substring extraction
+    #
+    # entities:
+    #   PERSON:
+    #     description: "a person's full name"
+    #     fields:
+    #       word_count: "{{word_count}}"
+    #       length: "{{length}}"
+    #   EMAIL_ADDRESS:
+    #     description: "an email address"
+    #     fields:
+    #       domain: "{{domain}}"
+    #       length: "{{length}}"
+    #   CREDIT_CARD:
+    #     description: "a credit card number"
+    #     fields:
+    #       last_digits: "{{slice:-4:-1}}"
+    #       length: "{{length}}"
 # PII Detection settings (Microsoft Presidio)
 pii_detection:
   presidio_url: ${PRESIDIO_URL:-http://localhost:5002}

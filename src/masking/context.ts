@@ -16,6 +16,10 @@ export interface PlaceholderContext {
   reverseMapping: Record<string, string>;
   /** Counter per type for sequential numbering */
   counters: Record<string, number>;
+  /** Maps placeholder -> entity type */
+  entityTypes: Record<string, string>;
+  /** Maps placeholder -> confidence score */
+  scores: Record<string, number>;
 }
 
 /**
@@ -37,6 +41,8 @@ export function createPlaceholderContext(): PlaceholderContext {
     mapping: {},
     reverseMapping: {},
     counters: {},
+    entityTypes: {},
+    scores: {},
   };
 }
 
@@ -127,6 +133,10 @@ export function replaceWithPlaceholders<T extends Span>(
       placeholder = generatePlaceholder(getType(item), context);
       context.mapping[placeholder] = originalValue;
       context.reverseMapping[originalValue] = placeholder;
+      context.entityTypes[placeholder] = getType(item);
+      if ('score' in item) {
+        context.scores[placeholder] = (item as any).score;
+      }
     }
 
     itemPlaceholders.set(item, placeholder);
@@ -197,4 +207,24 @@ export function flushBuffer(
 ): string {
   if (!buffer) return "";
   return restore(buffer, context);
+}
+
+/**
+ * Merges multiple placeholder contexts into one
+ */
+export function mergeContexts(
+  ...contexts: (PlaceholderContext | undefined)[]
+): PlaceholderContext {
+  const merged = createPlaceholderContext();
+  for (const ctx of contexts) {
+    if (!ctx) continue;
+    Object.assign(merged.mapping, ctx.mapping);
+    Object.assign(merged.reverseMapping, ctx.reverseMapping);
+    Object.assign(merged.entityTypes, ctx.entityTypes);
+    Object.assign(merged.scores, ctx.scores);
+    for (const [type, count] of Object.entries(ctx.counters)) {
+      merged.counters[type] = Math.max(merged.counters[type] ?? 0, count);
+    }
+  }
+  return merged;
 }

@@ -145,6 +145,22 @@ LANGUAGE_RECOGNIZERS = {
     ],
 }
 
+CUSTOM_REGEX_RECOGNIZERS = [
+    {
+        "name": "TvModelRecognizer",
+        "type": "custom",
+        "supported_entity": "TV_MODEL",
+        "supported_language": "en",
+        "patterns": [
+            {
+                "name": "tv_model_pattern",
+                "regex": r"\b\d{2,3}(?:QNED|NU|MRGB)\d{2,3}[A-Z0-9]{3}\b",
+                "score": 0.85,
+            }
+        ],
+        "context": ["model", "tv", "product", "display"],
+    }
+]
 
 def generate_recognizers_config(languages: list[str], registry: dict) -> dict:
     """Generate recognizers-config.yaml content."""
@@ -190,6 +206,9 @@ def generate_recognizers_config(languages: list[str], registry: dict) -> dict:
                     "supported_languages": lang_entry,
                     "type": "predefined",
                 })
+# Add custom regex recognizers
+    for recognizer in CUSTOM_REGEX_RECOGNIZERS:
+        recognizers.append(recognizer)
 
     return {
         "supported_languages": languages,

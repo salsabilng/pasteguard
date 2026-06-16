@@ -32,21 +32,3 @@ services:
       - ./data:/pasteguard/data
     restart: unless-stopped
 
-  # Development: Only Presidio (for local Bun with hot-reload)
-  presidio:
-    profiles: ["dev"]
-    image: ghcr.io/sgasser/pasteguard:${PASTEGUARD_TAG:-en}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-      args:
-        LANGUAGES: ${LANGUAGES:-en}
-    ports:
-      - "5002:5002"
-    environment:
-      - START_APP=false
-      - PORT=5002
-      - WORKERS=1
-    healthcheck:
-      disable: true
-    restart: unless-stopped

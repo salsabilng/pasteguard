@@ -32,6 +32,8 @@ import { unmaskSecretsResponse } from "../secrets/mask";
 import { logRequest } from "../services/logger";
 import { detectPII, maskPII, type PIIDetectResult } from "../services/pii";
 import { processSecretsRequest, type SecretsProcessResult } from "../services/secrets";
+import { injectMetadataSystemMessage } from "../masking/context-enrichment";
+import { mergeContexts } from "../masking/context";
 import {
   createLogData,
   errorFormats,
@@ -365,6 +367,13 @@ async function sendToLocal(c: Context, originalRequest: AnthropicRequest, opts: 
 async function sendToAnthropic(c: Context, request: AnthropicRequest, opts: SendOptions) {
   const config = getConfig();
   const { startTime, piiResult, piiMaskingContext, secretsResult, maskedContent } = opts;
+
+  // Inject context enrichment system message if enabled
+  const enrichmentConfig = config.masking.context_enrichment;
+  if (enrichmentConfig.enabled && (piiMaskingContext || secretsResult.maskingContext)) {
+    const mergedContext = mergeContexts(piiMaskingContext, secretsResult.maskingContext);
+    request = injectMetadataSystemMessage(request, mergedContext, enrichmentConfig, "anthropic");
+  }
 
   setResponseHeaders(
     c,
