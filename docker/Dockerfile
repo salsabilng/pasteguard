@@ -92,11 +92,11 @@ RUN mkdir -p /pasteguard/data && chown -R 1000:1000 /pasteguard
 # Copy supervisor configuration
 COPY docker/supervisord.conf /etc/supervisor/conf.d/pasteguard.conf
 
+# Create second Presidio app directory (identical config, different port)
+RUN cp -r /app /app2
+
 # Switch to non-root user for runtime
 USER 1000
-
-# Create second Presidio app directory (identical config, different port)
-RUN cp -a /app /app2
 
 # Environment defaults
 ENV PORT=5002
