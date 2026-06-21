@@ -154,8 +154,9 @@ languages:
     model: uk_core_news_lg
     phone_context: [телефон, номер, мобільний, мобілка, дзвінок, дзвони]
 
-  # Indonesian
+  # Indonesian (custom HuggingFace model - better NER than spaCy default)
   id:
     name: Indonesian
-    model: xx_ent_wiki_sm
+    model: ner-spacy-indonesian
+    custom_install: "https://huggingface.co/asmud/ner-spacy-indonesian/resolve/main/ner-spacy-indonesian-any-py3-none-any.whl"
     phone_context: [telepon, nomor, ponsel, hp, seluler, telepon genggam, menelepon]

@@ -83,6 +83,7 @@ export interface PIIHeaderData {
   hasPII: boolean;
   language: string;
   languageFallback: boolean;
+  presidioUrl?: string;
 }
 
 export interface SecretsHeaderData {
@@ -122,6 +123,8 @@ export function setResponseHeaders(
   // Worker pool status header
   const wStats = getWorkerPoolStats();
   c.header("X-Pasteguard-Workers", wStats.alive ? "pool:" + wStats.total : "inline");
+  // Which Presidio instance handled this request
+  c.header("X-Pasteguard-Presidio", pii.presidioUrl);
 }
 
 /**
@@ -179,6 +182,7 @@ export function toPIIHeaderData(piiResult: PIIDetectResult): PIIHeaderData {
     hasPII: piiResult.hasPII,
     language: piiResult.detection.language,
     languageFallback: piiResult.detection.languageFallback,
+    presidioUrl: piiResult.detection.presidioUrl ?? "none",
   };
 }
 

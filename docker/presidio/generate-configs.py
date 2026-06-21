@@ -254,11 +254,19 @@ def generate_install_script(languages: list[str], registry: dict) -> str:
     lines = ["#!/bin/sh", "set -e", ""]
 
     for lang in languages:
-        model = registry["languages"][lang]["model"]
-        url = f"https://github.com/explosion/spacy-models/releases/download/{model}-{version}/{model}-{version}-py3-none-any.whl"
-        lines.append(f'echo "Installing {model} for {lang}..."')
-        # Use poetry run pip to install in the correct virtual environment
-        lines.append(f"poetry run pip install --no-cache-dir {url}")
+        lang_config = registry["languages"][lang]
+        model = lang_config["model"]
+        custom_url = lang_config.get("custom_install")
+
+        if custom_url:
+            # Custom model from external source (e.g., HuggingFace)
+            lines.append(f'echo "Installing {model} for {lang} (custom)..."')
+            lines.append(f"poetry run pip install --no-cache-dir {custom_url}")
+        else:
+            # Standard spaCy model from GitHub releases
+            url = f"https://github.com/explosion/spacy-models/releases/download/{model}-{version}/{model}-{version}-py3-none-any.whl"
+            lines.append(f'echo "Installing {model} for {lang}..."')
+            lines.append(f"poetry run pip install --no-cache-dir {url}")
         lines.append("")
 
     lines.append('echo "All models installed successfully"')

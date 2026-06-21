@@ -41,6 +41,7 @@ export interface PIIDetectionResult {
   language: SupportedLanguage;
   languageFallback: boolean;
   detectedLanguage?: string;
+  presidioUrl?: string;
 }
 
 export class PIIDetector {
@@ -136,13 +137,38 @@ export class PIIDetector {
       : null;
     const whitelist = config.masking.whitelist;
 
+    // Track which Presidio URLs were used across all spans
+    const usedUrls: string[] = [];
+
     const spanEntities: PIIEntity[][] = await Promise.all(
       spans.map(async (span) => {
         if (scanRoles && span.role && !scanRoles.has(span.role)) {
           return [];
         }
         if (!span.text) return [];
-        const entities = await this.detectPII(span.text, langResult.language);
+        // Track which URL this call uses (round-robin)
+        const url = this.getNextPresidioUrl();
+        usedUrls.push(url);
+        const analyzeEndpoint = `${url}/analyze`;
+        const request: AnalyzeRequest = {
+          text: span.text,
+          language: langResult.language,
+          entities: this.entityTypes,
+          score_threshold: this.scoreThreshold,
+        };
+        const response = await throttledPresidioCall(() =>
+          fetch(analyzeEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(request),
+            signal: AbortSignal.timeout(30_000),
+          })
+        );
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Presidio API error: ${response.status} - ${errorText}`);
+        }
+        const entities = (await response.json()) as PIIEntity[];
         return filterWhitelistedEntities(span.text, entities, whitelist);
       }),
     );
@@ -157,6 +183,7 @@ export class PIIDetector {
       language: langResult.language,
       languageFallback: langResult.usedFallback,
       detectedLanguage: langResult.detectedLanguage,
+      presidioUrl: usedUrls[0] ?? this.presidioUrls[0],
     };
   }
 
