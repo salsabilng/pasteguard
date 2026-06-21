@@ -95,8 +95,10 @@ COPY docker/supervisord.conf /etc/supervisor/conf.d/pasteguard.conf
 # Switch to non-root user for runtime
 USER 1000
 
+# Create second Presidio app directory (identical config, different port)
+RUN cp -a /app /app2
+
 # Environment defaults
-ENV PRESIDIO_URL=http://localhost:5002
 ENV PORT=5002
 ENV WORKERS=1
 ENV START_APP=true
