@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { getConfig } from "../config";
 import { shouldLogMaskedContent } from "./log-content";
+import { enqueueLog, initAsyncLogger } from "./async-logger";
 
 export interface RequestLog {
   id?: number;
@@ -312,7 +313,6 @@ export interface RequestLogData {
 export function logRequest(data: RequestLogData, userAgent: string | null): void {
   try {
     const config = getConfig();
-    const logger = getLogger();
 
     const shouldLogContent = shouldLogMaskedContent({
       maskedContent: data.maskedContent,
@@ -321,11 +321,10 @@ export function logRequest(data: RequestLogData, userAgent: string | null): void
       secretsMasked: data.secretsMasked,
     });
 
-    // Only log secret types if configured to do so
     const shouldLogSecretTypes =
       config.secrets_detection.log_detected_types && data.secretsTypes?.length;
 
-    logger.log({
+    enqueueLog({
       timestamp: data.timestamp,
       mode: data.mode,
       provider: data.provider,
@@ -349,4 +348,13 @@ export function logRequest(data: RequestLogData, userAgent: string | null): void
   } catch (error) {
     console.error("Failed to log request:", error);
   }
+}
+
+export function initBatchedLogger(flushIntervalMs: number = 1000): void {
+  const db = getLogger();
+  initAsyncLogger((entries) => {
+    for (const entry of entries) {
+      db.log(entry);
+    }
+  }, flushIntervalMs, 50);
 }

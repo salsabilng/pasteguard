@@ -2,6 +2,7 @@ import { getConfig } from "../config";
 import { HEALTH_CHECK_TIMEOUT_MS } from "../constants/timeouts";
 import type { RequestExtractor } from "../masking/types";
 import { getLanguageDetector, type SupportedLanguage } from "../services/language-detector";
+import { throttledPresidioCall } from "../middleware/presidio-throttle";
 
 export interface PIIEntity {
   entity_type: string;
@@ -66,14 +67,16 @@ export class PIIDetector {
     };
 
     try {
-      const response = await fetch(analyzeEndpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(request),
-        signal: AbortSignal.timeout(30_000),
-      });
+      const response = await throttledPresidioCall(() =>
+        fetch(analyzeEndpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(request),
+          signal: AbortSignal.timeout(30_000),
+        })
+      );
 
       if (!response.ok) {
         const errorText = await response.text();

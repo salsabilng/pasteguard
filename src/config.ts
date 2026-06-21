@@ -101,6 +101,11 @@ const ServerSchema = z.object({
   port: z.coerce.number().int().min(1).max(65535).default(3000),
   host: z.string().default("0.0.0.0"),
   request_timeout: z.coerce.number().int().min(0).default(600),
+  max_concurrent_requests: z.coerce.number().int().min(0).default(50),
+  max_queue_size: z.coerce.number().int().min(0).default(100),
+  queue_timeout_ms: z.coerce.number().int().min(0).default(30000),
+  presidio_max_concurrent: z.coerce.number().int().min(0).default(10),
+  async_log_flush_ms: z.coerce.number().int().min(0).default(1000),
 });
 
 const LoggingSchema = z.object({

@@ -1,16 +1,8 @@
 import type { SecretsDetectionConfig } from "../config";
-import type { RequestExtractor, TextSpan } from "../masking/types";
+import type { TextSpan } from "../masking/types";
 import { patternDetectors } from "./patterns";
 import type {
   MessageSecretsResult,
-  SecretLocation,
-  SecretsDetectionResult,
-  SecretsMatch,
-} from "./patterns/types";
-
-export type {
-  MessageSecretsResult,
-  SecretEntityType,
   SecretLocation,
   SecretsDetectionResult,
   SecretsMatch,
@@ -68,24 +60,46 @@ export function detectSecrets(
 }
 
 /**
- * Detects secrets in a request using an extractor
- */
-export async function detectSecretsInRequest<TRequest, TResponse>(
-  request: TRequest,
-  config: SecretsDetectionConfig,
-  extractor: RequestExtractor<TRequest, TResponse>,
-): Promise<MessageSecretsResult> {
-  const spans = extractor.extractTexts(request);
-  return detectSecretsInSpans(spans, config);
-}
-
-/**
  * Detects secrets in text spans (low-level)
  */
-export async function detectSecretsInSpans(
+export function detectSecretsInSpans(
   spans: TextSpan[],
   config: SecretsDetectionConfig,
-): Promise<MessageSecretsResult> {
-  const { detectSecretsInSpansWorker } = await import("./worker-pool");
-  return detectSecretsInSpansWorker(spans, config);
+): MessageSecretsResult {
+  if (!config.enabled) {
+    return {
+      detected: false,
+      matches: [],
+      spanLocations: spans.map(() => []),
+    };
+  }
+
+  // Detect secrets in each span
+  const scanRoles = config.scan_roles ? new Set(config.scan_roles) : null;
+
+  const matchCounts = new Map<string, number>();
+  const spanLocations: SecretLocation[][] = spans.map((span) => {
+    if (scanRoles && span.role && !scanRoles.has(span.role)) {
+      return [];
+    }
+    const result = detectSecrets(span.text, config);
+    for (const match of result.matches) {
+      matchCounts.set(match.type, (matchCounts.get(match.type) || 0) + match.count);
+    }
+    return result.locations || [];
+  });
+
+  // Build matches array
+  const allMatches: SecretsMatch[] = [];
+  for (const [type, count] of matchCounts) {
+    allMatches.push({ type: type as SecretLocation["type"], count });
+  }
+
+  const hasLocations = spanLocations.some((locs) => locs.length > 0);
+
+  return {
+    detected: hasLocations,
+    matches: allMatches,
+    spanLocations,
+  };
 }

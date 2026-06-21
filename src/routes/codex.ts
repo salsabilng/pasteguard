@@ -72,7 +72,7 @@ codexRoutes.post(
     let request = c.req.valid("json") as CodexResponsesRequest;
     const config = getConfig();
 
-    const secretsResult = processSecretsRequest(request, config.secrets_detection, codexExtractor);
+    const secretsResult = await processSecretsRequest(request, config.secrets_detection, codexExtractor);
     if (secretsResult.blocked) {
       return respondBlocked(c, request, secretsResult, startTime);
     }

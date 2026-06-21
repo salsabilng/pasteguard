@@ -97,7 +97,7 @@ anthropicRoutes.post(
     }
 
     // Step 1: Process secrets
-    const secretsResult = processSecretsRequest(
+    const secretsResult = await processSecretsRequest(
       request,
       config.secrets_detection,
       anthropicExtractor,

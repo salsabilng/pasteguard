@@ -12,7 +12,10 @@ import { dashboardRoutes } from "./routes/dashboard";
 import { healthRoutes } from "./routes/health";
 import { infoRoutes } from "./routes/info";
 import { openaiRoutes } from "./routes/openai";
-import { getLogger } from "./services/logger";
+import { getLogger, initBatchedLogger } from "./services/logger";
+import { createConcurrencyMiddleware } from "./middleware/concurrency";
+import { initWorkerPool, shutdownWorkerPool } from "./secrets/worker-pool";
+import { drainAsyncLogger } from "./services/async-logger";
 
 type Variables = {
   requestId: string;
@@ -20,6 +23,14 @@ type Variables = {
 
 const config = getConfig();
 const app = new Hono<{ Variables: Variables }>();
+
+// Concurrency limiter
+const concurrencyMiddleware = createConcurrencyMiddleware(
+  config.server.max_concurrent_requests,
+  config.server.max_queue_size,
+  config.server.queue_timeout_ms,
+);
+app.use("*", concurrencyMiddleware);
 
 // Request ID middleware
 const requestIdMiddleware = createMiddleware<{ Variables: Variables }>(async (c, next) => {
@@ -127,6 +138,9 @@ async function validateStartup() {
   }
 
   console.log("[STARTUP] ✓ Presidio connected");
+
+  await initWorkerPool();
+  initBatchedLogger(config.server.async_log_flush_ms);
 
   // Validate configured languages
   console.log(`[STARTUP] Validating languages: ${config.pii_detection.languages.join(", ")}`);
@@ -249,6 +263,8 @@ function setupGracefulShutdown(stopCleanup: () => void) {
   function shutdown() {
     console.log("\nShutting down...");
     stopCleanup();
+    drainAsyncLogger();
+    shutdownWorkerPool();
     try {
       getLogger().close();
     } catch {
