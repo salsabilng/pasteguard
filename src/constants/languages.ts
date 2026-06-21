@@ -27,6 +27,7 @@ export const SUPPORTED_LANGUAGES = [
   "es", // Spanish
   "sv", // Swedish
   "uk", // Ukrainian
+  "id", // Indonesian
 ] as const;
 
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];

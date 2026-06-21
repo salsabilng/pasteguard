@@ -153,3 +153,9 @@ languages:
     name: Ukrainian
     model: uk_core_news_lg
     phone_context: [телефон, номер, мобільний, мобілка, дзвінок, дзвони]
+
+  # Indonesian
+  id:
+    name: Indonesian
+    model: xx_ent_wiki_sm
+    phone_context: [telepon, nomor, ponsel, hp, seluler, telepon genggam, menelepon]

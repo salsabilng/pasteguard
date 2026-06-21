@@ -154,11 +154,42 @@ CUSTOM_REGEX_RECOGNIZERS = [
         "patterns": [
             {
                 "name": "tv_model_pattern",
-                "regex": r"\b\d{2,3}(?:QNED|NU|MRGB)\d{2,3}[A-Z0-9]{3}\b",
-                "score": 0.85,
+                # Matches the base model and stops. Will NOT match if followed by a dot.
+                "regex": r"\b\d{2,3}(?:QNED|NU|MRGB)\d{2,3}[A-Z0-9]{0,3}(?![A-Z0-9.])",
+                "score": 0.95,
             }
         ],
         "context": ["model", "tv", "product", "display"],
+    },
+    {
+        "name": "TvModelWithSuffixRecognizer",
+        "type": "custom",
+        "supported_entity": "TV_MODEL_WITH_SUFFIX",
+        "supported_language": "en",
+        "patterns": [
+            {
+                "name": "tv_model_with_suffix_pattern",
+                # Matches the base model, a dot, and up to 7 characters/asterisks.
+                "regex": r"\b\d{2,3}(?:QNED|NU|MRGB)\d{2,3}[A-Z0-9]{0,3}\.[A-Z0-9*]{1,7}(?![A-Z0-9*])",
+                "score": 0.95,
+            }
+        ],
+        "context": ["model", "tv", "product", "display", "version", "suffix", "region", "inch", "development"],
+    },
+    {
+        "name": "PartNumberRecognizer",
+        "type": "custom",
+        "supported_entity": "PART_NUMBER",
+        "supported_language": "en",
+        "patterns": [
+            {
+                "name": "part_number_pattern",
+                # Starts with A, M, or E, followed by 2 letters, then 1 to 8 digits.
+                "regex": r"\b[AME][A-Z]{2}\d{1,8}\b",
+                "score": 0.95,
+            }
+        ],
+        "context": ["part", "number", "component", "board", "replacement", "spare", "item"],
     }
 ]
 
