@@ -7,13 +7,23 @@ interface PoolWorker {
   busy: boolean;
 }
 
+export interface WorkerPoolStats {
+  total: number;
+  busy: number;
+  idle: number;
+  alive: boolean;
+  requests_routed_to_pool: number;
+  requests_routed_to_inline: number;
+}
+
 let workers: PoolWorker[] = [];
 let workerCount = 0;
 let initialized = false;
 let nextId = 0;
+let poolRoutedCount = 0;
+let inlineRoutedCount = 0;
 
 function getWorkerUrl(): string {
-  // Bun: resolve the worker file relative to this module
   return new URL("./secret-worker.ts", import.meta.url).href;
 }
 
@@ -57,76 +67,72 @@ export async function initWorkerPool(): Promise<void> {
 
 export function shutdownWorkerPool(): void {
   for (const w of workers) {
-    try {
-      w.worker.terminate();
-    } catch {}
+    try { w.worker.terminate(); } catch {}
   }
   workers = [];
   initialized = false;
 }
 
-function getAvailableWorker(): PoolWorker | null {
-  // Respawn any dead workers (mark them as not busy so they're replaced)
+export function getWorkerPoolStats(): WorkerPoolStats {
+  // Remove dead workers
   for (let i = workers.length - 1; i >= 0; i--) {
-    const w = workers[i];
-    try {
-      // Test if worker is alive by checking a property
-      void w.worker;
-    } catch {
-      // Worker crashed — remove it
+    try { void workers[i].worker; } catch { workers.splice(i, 1); }
+  }
+  const busy = workers.filter((w) => w.busy).length;
+  return {
+    total: workers.length,
+    busy,
+    idle: workers.length - busy,
+    alive: workers.length > 0,
+    requests_routed_to_pool: poolRoutedCount,
+    requests_routed_to_inline: inlineRoutedCount,
+  };
+}
+
+function getAvailableWorker(): PoolWorker | null {
+  // Clean dead workers
+  for (let i = workers.length - 1; i >= 0; i--) {
+    try { void workers[i].worker; } catch {
       console.warn(`[WorkerPool] Worker #${i} died, removing from pool`);
       workers.splice(i, 1);
     }
   }
 
-  // Try to respawn if all workers died
+  // Respawn if all died
   if (workers.length === 0 && workerCount > 0) {
     const workerUrl = getWorkerUrl();
     for (let i = 0; i < workerCount; i++) {
       try {
         const worker = new Worker(workerUrl);
-        worker.onerror = (err) => {
-          console.error(`[WorkerPool] Worker error:`, err.message);
-        };
+        worker.onerror = (err) => console.error(`[WorkerPool] Worker error:`, err.message);
         workers.push({ worker, busy: false });
-      } catch {
-        break;
-      }
+      } catch { break; }
     }
     if (workers.length > 0) {
-      console.log(
-        `[WorkerPool] Respawned ${workers.length} workers after crash`,
-      );
+      console.log(`[WorkerPool] Respawned ${workers.length} workers after crash`);
     }
   }
 
-  // Find first idle worker
-  const idle = workers.find((w) => !w.busy);
-  return idle || null;
+  return workers.find((w) => !w.busy) || null;
 }
 
 export async function detectSecretsInSpansWorker(
   spans: TextSpan[],
   config: SecretsDetectionConfig,
 ): Promise<MessageSecretsResult> {
-  // Fast path: disabled config
   if (!config.enabled) {
-    return {
-      detected: false,
-      matches: [],
-      spanLocations: spans.map(() => []),
-    };
+    return { detected: false, matches: [], spanLocations: spans.map(() => []) };
   }
 
-  // Try worker pool
   const worker = getAvailableWorker();
 
   if (!worker) {
-    // Fallback: inline detection
+    inlineRoutedCount++;
     const { detectSecretsInSpans } = await import("./detect-inline");
     return detectSecretsInSpans(spans, config);
   }
 
+  poolRoutedCount++;
   worker.busy = true;
   const id = nextId++;
 
@@ -143,8 +149,7 @@ export async function detectSecretsInSpansWorker(
       worker.busy = false;
 
       if (e.data.error) {
-        // Worker returned error — might be dead, remove it
-        console.error(`[WorkerPool] Worker returned error: ${e.data.error}`);
+        console.error(`[WorkerPool] Worker error: ${e.data.error}`);
         const idx = workers.findIndex((w) => w.worker === worker.worker);
         if (idx !== -1) workers.splice(idx, 1);
         reject(new Error(e.data.error));
@@ -157,7 +162,6 @@ export async function detectSecretsInSpansWorker(
     worker.worker.addEventListener("error", (err) => {
       clearTimeout(timeout);
       worker.busy = false;
-      // Worker crashed — remove from pool
       const idx = workers.findIndex((w) => w.worker === worker.worker);
       if (idx !== -1) workers.splice(idx, 1);
       reject(new Error(`Worker crashed: ${err.message}`));

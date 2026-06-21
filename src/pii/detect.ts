@@ -44,20 +44,33 @@ export interface PIIDetectionResult {
 }
 
 export class PIIDetector {
-  private presidioUrl: string;
+  private presidioUrls: string[];
+  private nextIndex = 0;
   private scoreThreshold: number;
   private entityTypes: string[];
   private languageValidation?: { available: string[]; missing: string[] };
 
   constructor() {
     const config = getConfig();
-    this.presidioUrl = config.pii_detection.presidio_url;
+    // presidio_urls takes priority; fallback to single presidio_url
+    this.presidioUrls = config.pii_detection.presidio_urls ??
+      (config.pii_detection.presidio_url ? [config.pii_detection.presidio_url] : []);
+    if (this.presidioUrls.length === 0) {
+      throw new Error("No Presidio URLs configured. Set presidio_url or presidio_urls in config.yaml");
+    }
     this.scoreThreshold = config.pii_detection.score_threshold;
     this.entityTypes = config.pii_detection.entities;
   }
 
+  private getNextPresidioUrl(): string {
+    const url = this.presidioUrls[this.nextIndex % this.presidioUrls.length];
+    this.nextIndex = (this.nextIndex + 1) % this.presidioUrls.length;
+    return url;
+  }
+
   async detectPII(text: string, language: SupportedLanguage): Promise<PIIEntity[]> {
-    const analyzeEndpoint = `${this.presidioUrl}/analyze`;
+    const baseUrl = this.getNextPresidioUrl();
+    const analyzeEndpoint = `${baseUrl}/analyze`;
 
     const request: AnalyzeRequest = {
       text,
@@ -89,7 +102,7 @@ export class PIIDetector {
     } catch (error) {
       if (error instanceof Error) {
         if (error.message.includes("fetch")) {
-          throw new Error(`Failed to connect to Presidio at ${this.presidioUrl}: ${error.message}`);
+          throw new Error(`Failed to connect to Presidio at ${baseUrl}: ${error.message}`);
         }
         throw error;
       }
@@ -148,15 +161,21 @@ export class PIIDetector {
   }
 
   async healthCheck(): Promise<boolean> {
-    try {
-      const response = await fetch(`${this.presidioUrl}/health`, {
-        method: "GET",
-        signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
-      });
-      return response.ok;
-    } catch {
-      return false;
+    // Check all Presidio instances — healthy if at least one responds
+    const results = await Promise.allSettled(
+      this.presidioUrls.map(async (url) => {
+        const response = await fetch(`${url}/health`, {
+          method: "GET",
+          signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
+        });
+        return response.ok;
+      })
+    );
+    const healthyCount = results.filter((r) => r.status === "fulfilled" && r.value === true).length;
+    if (healthyCount < this.presidioUrls.length) {
+      console.warn(`[Presidio] ${healthyCount}/${this.presidioUrls.length} instances healthy`);
     }
+    return healthyCount > 0;
   }
 
   /**
@@ -186,7 +205,8 @@ export class PIIDetector {
    */
   async isLanguageSupported(language: string): Promise<boolean> {
     try {
-      const response = await fetch(`${this.presidioUrl}/analyze`, {
+      const baseUrl = this.getNextPresidioUrl();
+      const response = await fetch(`${baseUrl}/analyze`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

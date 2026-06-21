@@ -1,9 +1,14 @@
 import { Hono } from "hono";
+import { getWorkerPoolStats } from "../secrets/worker-pool";
 import { getConfig } from "../config";
 import { checkLocalHealth } from "../providers/local";
 import { healthCheck as checkPresidio } from "../services/pii";
 
 export const healthRoutes = new Hono();
+
+healthRoutes.get("/health/workers", (c) => {
+  return c.json(getWorkerPoolStats());
+});
 
 healthRoutes.get("/health", async (c) => {
   const config = getConfig();

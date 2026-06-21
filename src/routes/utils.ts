@@ -10,6 +10,7 @@ import { getConfig } from "../config";
 import { ProviderError } from "../providers/errors";
 import type { RequestLogData } from "../services/logger";
 import { logRequest } from "../services/logger";
+import { getWorkerPoolStats } from "../secrets/worker-pool";
 import type { PIIDetectResult } from "../services/pii";
 import type { SecretsProcessResult } from "../services/secrets";
 
@@ -118,6 +119,9 @@ export function setResponseHeaders(
   if (secrets?.masked) {
     c.header("X-PasteGuard-Secrets-Masked", "true");
   }
+  // Worker pool status header
+  const wStats = getWorkerPoolStats();
+  c.header("X-Pasteguard-Workers", wStats.alive ? "pool:" + wStats.total : "inline");
 }
 
 /**

@@ -32,3 +32,25 @@ services:
       - ./data:/pasteguard/data
     restart: unless-stopped
 
+  # Presidio Analyzer Instance 1
+  presidio-1:
+    image: ghcr.io/microsoft/presidio-analyzer:latest
+    environment:
+      - ANALYZER_CONF_FILE=/conf/analyzer.yaml
+    volumes:
+      - ./docker/presidio:/conf:ro
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+  # Presidio Analyzer Instance 2
+  presidio-2:
+    image: ghcr.io/microsoft/presidio-analyzer:latest
+    environment:
+      - ANALYZER_CONF_FILE=/conf/analyzer.yaml
+    volumes:
+      - ./docker/presidio:/conf:ro
+    expose:
+      - "3000"
+    restart: unless-stopped
+

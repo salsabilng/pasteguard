@@ -94,7 +94,14 @@ masking:
     #       length: "{{length}}"
 # PII Detection settings (Microsoft Presidio)
 pii_detection:
-  presidio_url: ${PRESIDIO_URL:-http://localhost:5002}
+  # Single Presidio instance (backward compatible)
+  # presidio_url: ${PRESIDIO_URL:-http://localhost:5002}
+
+  # Multiple Presidio instances for parallel PII analysis (recommended)
+  # Round-robin distributes requests across instances
+  presidio_urls:
+    - ${PRESIDIO_URL_1:-http://presidio-1:3000}
+    - ${PRESIDIO_URL_2:-http://presidio-2:3000}
 
   # Supported languages for PII detection
   # Auto-detects language from input text and uses appropriate model
