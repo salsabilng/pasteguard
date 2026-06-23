@@ -131,9 +131,17 @@ export class PIIDetector {
       ? getLanguageDetector().detect(langText)
       : { language: config.pii_detection.fallback_language, usedFallback: true };
 
-    // Build list of languages to scan: primary + secondary
+    // Build list of languages to scan: primary + cross-language fallbacks
     const primaryLang = langResult.language;
-    const secondaryLangs = config.pii_detection.secondary_languages ?? [];
+    const secondaryLangs: string[] = [];
+
+    // When primary is English, always also scan with Indonesian
+    // This catches Indonesian names/locations in English text
+    // Presidio will gracefully return [] if 'id' model is not loaded
+    if (primaryLang === "en") {
+      secondaryLangs.push("id");
+    }
+
     const scanLanguages = [primaryLang, ...secondaryLangs];
 
     // Detect PII for each span independently, across all scan languages
@@ -152,21 +160,18 @@ export class PIIDetector {
         }
         if (!span.text) return [];
 
-        // Scan this span with all configured languages, merge results
-        const allSpanEntities: PIIEntity[] = [];
-        const seen = new Set<string>(); // deduplicate overlapping entities
-
-        for (const lang of scanLanguages) {
-          const url = this.getNextPresidioUrl();
-          usedUrls.push(url);
-          const analyzeEndpoint = `${url}/analyze`;
-          const presidioReq: AnalyzeRequest = {
-            text: span.text,
-            language: lang,
-            entities: this.entityTypes,
-            score_threshold: this.scoreThreshold,
-          };
-          try {
+        // Scan this span with ALL languages in parallel, merge results
+        const langResults = await Promise.allSettled(
+          scanLanguages.map(async (lang) => {
+            const url = this.getNextPresidioUrl();
+            usedUrls.push(url);
+            const analyzeEndpoint = `${url}/analyze`;
+            const presidioReq: AnalyzeRequest = {
+              text: span.text,
+              language: lang,
+              entities: this.entityTypes,
+              score_threshold: this.scoreThreshold,
+            };
             const response = await throttledPresidioCall(() =>
               fetch(analyzeEndpoint, {
                 method: "POST",
@@ -175,18 +180,31 @@ export class PIIDetector {
                 signal: AbortSignal.timeout(30_000),
               })
             );
-            if (response.ok) {
-              const entities = (await response.json()) as PIIEntity[];
-              for (const e of entities) {
-                const key = `${e.start}-${e.end}-${e.entity_type}`;
-                if (!seen.has(key)) {
-                  seen.add(key);
-                  allSpanEntities.push(e);
-                }
+            if (!response.ok) {
+              const errText = await response.text();
+              throw new Error(`Presidio ${lang} ${response.status}: ${errText}`);
+            }
+            const entities = (await response.json()) as PIIEntity[];
+            return { lang, entities };
+          }),
+        );
+
+        // Log results per language for debugging
+        const allSpanEntities: PIIEntity[] = [];
+        const seen = new Set<string>();
+        for (const result of langResults) {
+          if (result.status === "fulfilled") {
+            const { lang, entities } = result.value;
+            console.log(`[PII] ${lang} scan: ${entities.length} entities${entities.length > 0 ? " → " + entities.map(e => `${e.entity_type}:${span.text.slice(e.start, e.end)}`).join(", ") : ""}`);
+            for (const e of entities) {
+              const key = `${e.start}-${e.end}-${e.entity_type}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                allSpanEntities.push(e);
               }
             }
-          } catch {
-            // If one language fails, continue with others
+          } else {
+            console.warn(`[PII] scan failed: ${result.reason?.message ?? result.reason}`);
           }
         }
 

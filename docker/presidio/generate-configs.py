@@ -264,7 +264,7 @@ def generate_install_script(languages: list[str], registry: dict) -> str:
             lines.append(f"poetry run pip install --no-cache-dir {custom_url}")
         else:
             # Standard spaCy model from GitHub releases
-            url = f"https://huggingface.co/asmud/ner-spacy-indonesian/resolve/main/id_ner_spacy_indonesian-1.1.0-py3-none-any.whl"
+            url = f"https://github.com/explosion/spacy-models/releases/download/{model}-{version}/{model}-{version}-py3-none-any.whl"
             lines.append(f'echo "Installing {model} for {lang}..."')
             lines.append(f"poetry run pip install --no-cache-dir {url}")
         lines.append("")

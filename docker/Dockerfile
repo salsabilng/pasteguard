@@ -4,7 +4,7 @@
 # Build: docker build -f docker/Dockerfile --build-arg LANGUAGES=en -t pasteguard:en .
 # Run:   docker run -p 3000:3000 -v ./config.yaml:/pasteguard/config.yaml -v ./data:/pasteguard/data pasteguard:en
 
-ARG LANGUAGES="en"
+ARG LANGUAGES="en,id"
 
 # =============================================================================
 # Stage 1: Generate Presidio configuration files
