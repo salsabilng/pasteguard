@@ -166,11 +166,13 @@ export class PIIDetector {
             const url = this.getNextPresidioUrl();
             usedUrls.push(url);
             const analyzeEndpoint = `${url}/analyze`;
+            // Lower threshold for secondary languages to catch more entities
+            const threshold = lang === primaryLang ? this.scoreThreshold : this.scoreThreshold * 0.5;
             const presidioReq: AnalyzeRequest = {
               text: span.text,
               language: lang,
               entities: this.entityTypes,
-              score_threshold: this.scoreThreshold,
+              score_threshold: threshold,
             };
             const response = await throttledPresidioCall(() =>
               fetch(analyzeEndpoint, {
@@ -184,8 +186,11 @@ export class PIIDetector {
               const errText = await response.text();
               throw new Error(`Presidio ${lang} ${response.status}: ${errText}`);
             }
-            const entities = (await response.json()) as PIIEntity[];
-            return { lang, entities };
+            const rawEntities = (await response.json()) as PIIEntity[];
+            if (rawEntities.length > 0) {
+              console.log(`[PII-DEBUG] ${lang} raw: ${JSON.stringify(rawEntities.slice(0, 10))}`);
+            }
+            return { lang, entities: rawEntities };
           }),
         );
 
