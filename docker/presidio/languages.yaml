@@ -157,6 +157,6 @@ languages:
   # Indonesian (custom HuggingFace model - better NER than spaCy default)
   id:
     name: Indonesian
-    model: ner-spacy-indonesian
-    custom_install: "https://huggingface.co/asmud/ner-spacy-indonesian/resolve/main/ner-spacy-indonesian-any-py3-none-any.whl"
+    model: id_ner_spacy_indonesian
+    custom_install: "https://huggingface.co/asmud/ner-spacy-indonesian/resolve/main/id_ner_spacy_indonesian-1.1.0-py3-none-any.whl"
     phone_context: [telepon, nomor, ponsel, hp, seluler, telepon genggam, menelepon]
