@@ -100,6 +100,12 @@ pii_detection:
     - http://localhost:5002
     - http://localhost:5003
 
+  # Secondary languages: always scan with these languages IN ADDITION to the
+  # auto-detected language. Useful when prompts are in one language but contain
+  # PII from another (e.g. English prompt with Indonesian names).
+  secondary_languages:
+    - id
+
   # Supported languages for PII detection
   # Auto-detects language from input text and uses appropriate model
   #

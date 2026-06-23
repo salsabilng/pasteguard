@@ -82,6 +82,7 @@ const PIIDetectionSchema = z.object({
   presidio_url: z.string().url().optional(),
   presidio_urls: z.array(z.string().url()).optional(),
   languages: LanguagesSchema,
+  secondary_languages: z.array(z.string()).default([]),
   fallback_language: LanguageEnum.default("en"),
   score_threshold: z.coerce.number().min(0).max(1).default(0.7),
   entities: z

@@ -131,7 +131,12 @@ export class PIIDetector {
       ? getLanguageDetector().detect(langText)
       : { language: config.pii_detection.fallback_language, usedFallback: true };
 
-    // Detect PII for each span independently
+    // Build list of languages to scan: primary + secondary
+    const primaryLang = langResult.language;
+    const secondaryLangs = config.pii_detection.secondary_languages ?? [];
+    const scanLanguages = [primaryLang, ...secondaryLangs];
+
+    // Detect PII for each span independently, across all scan languages
     const scanRoles = config.pii_detection.scan_roles
       ? new Set(config.pii_detection.scan_roles)
       : null;
@@ -146,30 +151,46 @@ export class PIIDetector {
           return [];
         }
         if (!span.text) return [];
-        // Track which URL this call uses (round-robin)
-        const url = this.getNextPresidioUrl();
-        usedUrls.push(url);
-        const analyzeEndpoint = `${url}/analyze`;
-        const request: AnalyzeRequest = {
-          text: span.text,
-          language: langResult.language,
-          entities: this.entityTypes,
-          score_threshold: this.scoreThreshold,
-        };
-        const response = await throttledPresidioCall(() =>
-          fetch(analyzeEndpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(request),
-            signal: AbortSignal.timeout(30_000),
-          })
-        );
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Presidio API error: ${response.status} - ${errorText}`);
+
+        // Scan this span with all configured languages, merge results
+        const allSpanEntities: PIIEntity[] = [];
+        const seen = new Set<string>(); // deduplicate overlapping entities
+
+        for (const lang of scanLanguages) {
+          const url = this.getNextPresidioUrl();
+          usedUrls.push(url);
+          const analyzeEndpoint = `${url}/analyze`;
+          const presidioReq: AnalyzeRequest = {
+            text: span.text,
+            language: lang,
+            entities: this.entityTypes,
+            score_threshold: this.scoreThreshold,
+          };
+          try {
+            const response = await throttledPresidioCall(() =>
+              fetch(analyzeEndpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(presidioReq),
+                signal: AbortSignal.timeout(30_000),
+              })
+            );
+            if (response.ok) {
+              const entities = (await response.json()) as PIIEntity[];
+              for (const e of entities) {
+                const key = `${e.start}-${e.end}-${e.entity_type}`;
+                if (!seen.has(key)) {
+                  seen.add(key);
+                  allSpanEntities.push(e);
+                }
+              }
+            }
+          } catch {
+            // If one language fails, continue with others
+          }
         }
-        const entities = (await response.json()) as PIIEntity[];
-        return filterWhitelistedEntities(span.text, entities, whitelist);
+
+        return filterWhitelistedEntities(span.text, allSpanEntities, whitelist);
       }),
     );
 
