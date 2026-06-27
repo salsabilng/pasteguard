@@ -21,7 +21,10 @@ from .entities import (
     EMAIL_ADDRESS,
     IBAN_CODE,
     IP_ADDRESS,
+    PART_NUMBER,
     PHONE_NUMBER,
+    TV_MODEL,
+    TV_MODEL_WITH_SUFFIX,
     VAT_CODE,
     Span,
     overlaps,
@@ -139,6 +142,36 @@ def _phone_regions(phone_regions: list[str] | None) -> list[str]:
     return []
 
 
+# TV model patterns (matches QNED, NU, MRGB series)
+# TV_MODEL: matches base model without suffix (e.g., 65QNED999A)
+_TV_MODEL_RE = re.compile(r"(?<![\w.])(\d{2,3}(?:QNED|NU|MRGB)\d{2,3}[A-Z0-9]{0,3})(?![A-Z0-9.])")
+# TV_MODEL_WITH_SUFFIX: matches model with dot suffix (e.g., 65QNED999A.AUS)
+_TV_MODEL_SUFFIX_RE = re.compile(r"(?<![\w.])(\d{2,3}(?:QNED|NU|MRGB)\d{2,3}[A-Z0-9]{0,3}\.\*?[A-Z0-9*]{1,7})(?![A-Z0-9*])")
+# PART_NUMBER: starts with A/M/E + 2 letters + 6-8 digits
+_PART_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])([AME][A-Z]{2}\d{6,8})(?![A-Za-z0-9])")
+
+
+def _tv_model(text: str) -> list[Span]:
+    out: list[Span] = []
+    for m in _TV_MODEL_RE.finditer(text):
+        out.append(Span(TV_MODEL, m.start(1), m.end(1), 0.95))
+    return out
+
+
+def _tv_model_with_suffix(text: str) -> list[Span]:
+    out: list[Span] = []
+    for m in _TV_MODEL_SUFFIX_RE.finditer(text):
+        out.append(Span(TV_MODEL_WITH_SUFFIX, m.start(1), m.end(1), 0.95))
+    return out
+
+
+def _part_number(text: str) -> list[Span]:
+    out: list[Span] = []
+    for m in _PART_NUMBER_RE.finditer(text):
+        out.append(Span(PART_NUMBER, m.start(1), m.end(1), 0.95))
+    return out
+
+
 def _phone(text: str, phone_regions: list[str] | None = None) -> list[Span]:
     regions: list[str | None] = []
     regions.extend(_phone_regions(phone_regions))
@@ -168,6 +201,9 @@ def detect_deterministic(text: str, phone_regions: list[str] | None = None) -> l
     ordered += _vat(text)
     ordered += _credit_card(text)
     ordered += _phone(text, phone_regions)
+    ordered += _tv_model_with_suffix(text)  # Before _tv_model to prefer longer match
+    ordered += _tv_model(text)
+    ordered += _part_number(text)
 
     accepted: list[Span] = []
     for span in ordered:

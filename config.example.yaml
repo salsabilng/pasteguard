@@ -94,6 +94,9 @@ pii_detection:
     - IBAN_CODE
     - IP_ADDRESS
     - VAT_CODE  # EU VAT number (any member state; requires country prefix)
+    - TV_MODEL  # TV model numbers (e.g., 65QNED999A)
+    - TV_MODEL_WITH_SUFFIX  # TV model + suffix (e.g., 65QNED999A.AUS)
+    - PART_NUMBER  # Part numbers (e.g., AME12345678)
 
 # Secrets Detection settings (Secrets Shield)
 # Detects private keys, API keys, tokens and other secret credentials in requests

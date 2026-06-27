@@ -20,6 +20,11 @@ IBAN_CODE = "IBAN_CODE"
 IP_ADDRESS = "IP_ADDRESS"
 VAT_CODE = "VAT_CODE"
 
+# Custom entity types (user-defined recognizers)
+TV_MODEL = "TV_MODEL"
+TV_MODEL_WITH_SUFFIX = "TV_MODEL_WITH_SUFFIX"
+PART_NUMBER = "PART_NUMBER"
+
 
 @dataclass(frozen=True)
 class Span:
