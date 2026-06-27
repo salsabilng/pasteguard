@@ -12,10 +12,8 @@ import { dashboardRoutes } from "./routes/dashboard";
 import { healthRoutes } from "./routes/health";
 import { infoRoutes } from "./routes/info";
 import { openaiRoutes } from "./routes/openai";
-import { getLogger, initBatchedLogger } from "./services/logger";
+import { getLogger } from "./services/logger";
 import { createConcurrencyMiddleware } from "./middleware/concurrency";
-import { initWorkerPool, shutdownWorkerPool } from "./secrets/worker-pool";
-import { drainAsyncLogger } from "./services/async-logger";
 
 type Variables = {
   requestId: string;
@@ -26,9 +24,9 @@ const app = new Hono<{ Variables: Variables }>();
 
 // Concurrency limiter
 const concurrencyMiddleware = createConcurrencyMiddleware(
-  config.server.max_concurrent_requests,
-  config.server.max_queue_size,
-  config.server.queue_timeout_ms,
+  config.server.max_concurrent_requests || 10,
+  config.server.max_queue_size || 50,
+  config.server.queue_timeout_ms || 30000,
 );
 app.use("*", concurrencyMiddleware);
 
@@ -122,47 +120,20 @@ async function validateStartup() {
 
   const detector = getPIIDetector();
 
-  // Wait for Presidio to be ready (multi-language setups need longer to load spaCy models)
+  // Wait for the detector to be ready (model load can take a while on first start)
   const startupTimeout = Number(process.env.PASTEGUARD_STARTUP_TIMEOUT) || 180;
-  console.log("[STARTUP] Connecting to Presidio...");
+  console.log("[STARTUP] Connecting to the detector...");
   const ready = await detector.waitForReady(startupTimeout, 1000);
 
   if (!ready) {
     console.error(
-      `[STARTUP] ✗ Could not connect to Presidio at ${config.pii_detection.presidio_url}`,
+      `[STARTUP] ✗ Could not connect to the detector at ${config.pii_detection.detector_urls?.[0] || config.pii_detection.detector_url || 'unknown'}`,
     );
-    console.error(
-      "          Make sure Presidio is running: docker compose up presidio-analyzer -d",
-    );
+    console.error("          Make sure the detector is running: docker compose up detector -d");
     process.exit(1);
   }
 
-  console.log("[STARTUP] ✓ Presidio connected");
-
-  await initWorkerPool();
-  initBatchedLogger(config.server.async_log_flush_ms);
-
-  // Validate configured languages
-  console.log(`[STARTUP] Validating languages: ${config.pii_detection.languages.join(", ")}`);
-  const validation = await detector.validateLanguages(config.pii_detection.languages);
-
-  if (validation.missing.length > 0) {
-    console.error("\n❌ Language mismatch detected!\n");
-    console.error(`   Configured: ${config.pii_detection.languages.join(", ")}`);
-    console.error(
-      `   Available:  ${validation.available.length > 0 ? validation.available.join(", ") : "(none)"}`,
-    );
-    console.error(`   Missing:    ${validation.missing.join(", ")}\n`);
-    console.error("   To fix, either:");
-    console.error(
-      `   1. Rebuild: LANGUAGES=${config.pii_detection.languages.join(",")} docker compose build presidio-analyzer`,
-    );
-    console.error(`   2. Update config.yaml languages to: [${validation.available.join(", ")}]\n`);
-    console.error("[STARTUP] ✗ Language configuration mismatch. Exiting for safety.");
-    process.exit(1);
-  } else {
-    console.log("[STARTUP] ✓ All configured languages available");
-  }
+  console.log("[STARTUP] ✓ Detector connected");
 }
 
 function printStartupBanner(config: ReturnType<typeof getConfig>, host: string, port: number) {
@@ -204,8 +175,7 @@ Mode:       ${config.mode.toUpperCase()}
 ${modeInfo}
 
 PII Detection:
-  Languages: ${config.pii_detection.languages.join(", ")}
-  Fallback:  ${config.pii_detection.fallback_language}
+  Phone regions: ${config.pii_detection.phone_regions.length > 0 ? config.pii_detection.phone_regions.join(", ") : "none (+ international only)"}
   Threshold: ${config.pii_detection.score_threshold}
   Entities:  ${config.pii_detection.entities.join(", ")}
 
@@ -263,8 +233,6 @@ function setupGracefulShutdown(stopCleanup: () => void) {
   function shutdown() {
     console.log("\nShutting down...");
     stopCleanup();
-    drainAsyncLogger();
-    shutdownWorkerPool();
     try {
       getLogger().close();
     } catch {

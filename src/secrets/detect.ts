@@ -10,23 +10,11 @@ import type {
 
 export type {
   MessageSecretsResult,
-  SecretEntityType,
   SecretLocation,
-  SecretsDetectionResult,
-  SecretsMatch,
 } from "./patterns/types";
 
-/**
- * Detects secret material (e.g. private keys, API keys, tokens) in text
- *
- * Uses the pattern registry to scan for various secret types:
- * - Private keys: OpenSSH, PEM (RSA, generic, encrypted)
- * - API keys: OpenAI, AWS, GitHub
- * - Tokens: JWT, Bearer
- * - Environment variables: Passwords, secrets, connection strings
- *
- * Respects max_scan_chars limit for performance.
- */
+// Scans private keys, API keys, tokens, env secrets, and connection strings.
+// Respects max_scan_chars to cap regex work on large prompts.
 export function detectSecrets(
   text: string,
   config: SecretsDetectionConfig,
@@ -67,25 +55,53 @@ export function detectSecrets(
   };
 }
 
-/**
- * Detects secrets in a request using an extractor
- */
-export async function detectSecretsInRequest<TRequest, TResponse>(
+export function detectSecretsInRequest<TRequest, TResponse>(
   request: TRequest,
   config: SecretsDetectionConfig,
   extractor: RequestExtractor<TRequest, TResponse>,
-): Promise<MessageSecretsResult> {
+): MessageSecretsResult {
   const spans = extractor.extractTexts(request);
   return detectSecretsInSpans(spans, config);
 }
 
-/**
- * Detects secrets in text spans (low-level)
- */
-export async function detectSecretsInSpans(
+export function detectSecretsInSpans(
   spans: TextSpan[],
   config: SecretsDetectionConfig,
-): Promise<MessageSecretsResult> {
-  const { detectSecretsInSpansWorker } = await import("./worker-pool");
-  return detectSecretsInSpansWorker(spans, config);
+): MessageSecretsResult {
+  if (!config.enabled) {
+    return {
+      detected: false,
+      matches: [],
+      spanLocations: spans.map(() => []),
+    };
+  }
+
+  // Detect secrets in each span
+  const scanRoles = new Set(config.scan_roles);
+
+  const matchCounts = new Map<string, number>();
+  const spanLocations: SecretLocation[][] = spans.map((span) => {
+    if (!span.role || !scanRoles.has(span.role)) {
+      return [];
+    }
+    const result = detectSecrets(span.text, config);
+    for (const match of result.matches) {
+      matchCounts.set(match.type, (matchCounts.get(match.type) || 0) + match.count);
+    }
+    return result.locations || [];
+  });
+
+  // Build matches array
+  const allMatches: SecretsMatch[] = [];
+  for (const [type, count] of matchCounts) {
+    allMatches.push({ type: type as SecretLocation["type"], count });
+  }
+
+  const hasLocations = spanLocations.some((locs) => locs.length > 0);
+
+  return {
+    detected: hasLocations,
+    matches: allMatches,
+    spanLocations,
+  };
 }

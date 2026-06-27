@@ -2,13 +2,16 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { getConfig } from "../config";
 import { shouldLogMaskedContent } from "./log-content";
-import { enqueueLog, initAsyncLogger } from "./async-logger";
+
+export type RequestProvider = "openai" | "anthropic" | "codex" | "local" | "api";
+export type RequestSource = RequestProvider | "browser_extension";
 
 export interface RequestLog {
   id?: number;
   timestamp: string;
   mode: "route" | "mask";
-  provider: "openai" | "anthropic" | "codex" | "local" | "api";
+  provider: RequestProvider;
+  source: RequestSource;
   model: string;
   pii_detected: boolean;
   entities: string;
@@ -17,9 +20,6 @@ export interface RequestLog {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   user_agent: string | null;
-  language: string;
-  language_fallback: boolean;
-  detected_language: string | null;
   masked_content: string | null;
   secrets_detected: number | null;
   secrets_types: string | null;
@@ -27,9 +27,6 @@ export interface RequestLog {
   error_message: string | null;
 }
 
-/**
- * Statistics summary
- */
 export interface Stats {
   total_requests: number;
   pii_requests: number;
@@ -37,14 +34,27 @@ export interface Stats {
   proxy_requests: number;
   local_requests: number;
   api_requests: number;
+  browser_extension_requests: number;
   avg_scan_time_ms: number;
   total_tokens: number;
   requests_last_hour: number;
 }
 
-/**
- * SQLite-based logger for request tracking
- */
+export function normalizeRequestSource(
+  provider: RequestProvider,
+  sourceHeader?: string | null,
+): RequestSource {
+  if (provider !== "api") {
+    return provider;
+  }
+
+  if (sourceHeader?.trim().toLowerCase() === "browser-extension") {
+    return "browser_extension";
+  }
+
+  return "api";
+}
+
 export class Logger {
   private db: Database;
   private retentionDays: number;
@@ -71,6 +81,7 @@ export class Logger {
         timestamp TEXT NOT NULL,
         mode TEXT NOT NULL DEFAULT 'route',
         provider TEXT NOT NULL,
+        source TEXT,
         model TEXT NOT NULL,
         pii_detected INTEGER NOT NULL DEFAULT 0,
         entities TEXT,
@@ -79,9 +90,6 @@ export class Logger {
         prompt_tokens INTEGER,
         completion_tokens INTEGER,
         user_agent TEXT,
-        language TEXT NOT NULL DEFAULT 'en',
-        language_fallback INTEGER NOT NULL DEFAULT 0,
-        detected_language TEXT,
         masked_content TEXT,
         secrets_detected INTEGER,
         secrets_types TEXT,
@@ -101,6 +109,10 @@ export class Logger {
       this.db.run("ALTER TABLE request_logs ADD COLUMN status_code INTEGER");
       this.db.run("ALTER TABLE request_logs ADD COLUMN error_message TEXT");
     }
+    if (!columns.find((c) => c.name === "source")) {
+      this.db.run("ALTER TABLE request_logs ADD COLUMN source TEXT");
+      this.db.run("UPDATE request_logs SET source = provider WHERE source IS NULL");
+    }
 
     // Create indexes for performance
     this.db.run(`
@@ -117,15 +129,16 @@ export class Logger {
   log(entry: Omit<RequestLog, "id">): void {
     const stmt = this.db.prepare(`
       INSERT INTO request_logs
-        (timestamp, mode, provider, model, pii_detected, entities, latency_ms, scan_time_ms, prompt_tokens, completion_tokens, user_agent, language, language_fallback, detected_language, masked_content, secrets_detected, secrets_types, status_code, error_message)
+        (timestamp, mode, provider, source, model, pii_detected, entities, latency_ms, scan_time_ms, prompt_tokens, completion_tokens, user_agent, masked_content, secrets_detected, secrets_types, status_code, error_message)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
       entry.timestamp,
       entry.mode,
       entry.provider,
+      entry.source,
       entry.model,
       entry.pii_detected ? 1 : 0,
       entry.entities,
@@ -134,9 +147,6 @@ export class Logger {
       entry.prompt_tokens,
       entry.completion_tokens,
       entry.user_agent,
-      entry.language,
-      entry.language_fallback ? 1 : 0,
-      entry.detected_language,
       entry.masked_content,
       entry.secrets_detected ?? null,
       entry.secrets_types ?? null,
@@ -145,22 +155,38 @@ export class Logger {
     );
   }
 
-  /**
-   * Gets recent logs
-   */
   getLogs(limit: number = 100, offset: number = 0): RequestLog[] {
     const stmt = this.db.prepare(`
-      SELECT * FROM request_logs
+      SELECT
+        id,
+        timestamp,
+        mode,
+        provider,
+        source,
+        model,
+        pii_detected,
+        entities,
+        latency_ms,
+        scan_time_ms,
+        prompt_tokens,
+        completion_tokens,
+        user_agent,
+        masked_content,
+        secrets_detected,
+        secrets_types,
+        status_code,
+        error_message
+      FROM request_logs
       ORDER BY timestamp DESC
       LIMIT ? OFFSET ?
     `);
 
-    return stmt.all(limit, offset) as RequestLog[];
+    return (stmt.all(limit, offset) as RequestLog[]).map((log) => ({
+      ...log,
+      source: log.source || normalizeRequestSource(log.provider),
+    }));
   }
 
-  /**
-   * Gets statistics
-   */
   getStats(): Stats {
     // Total requests
     const totalResult = this.db.prepare(`SELECT COUNT(*) as count FROM request_logs`).get() as {
@@ -182,7 +208,12 @@ export class Logger {
       .prepare(`SELECT COUNT(*) as count FROM request_logs WHERE provider = 'local'`)
       .get() as { count: number };
     const apiResult = this.db
-      .prepare(`SELECT COUNT(*) as count FROM request_logs WHERE provider = 'api'`)
+      .prepare(
+        `SELECT COUNT(*) as count FROM request_logs WHERE provider = 'api' AND source != 'browser_extension'`,
+      )
+      .get() as { count: number };
+    const browserExtensionResult = this.db
+      .prepare(`SELECT COUNT(*) as count FROM request_logs WHERE source = 'browser_extension'`)
       .get() as { count: number };
 
     // Average scan time
@@ -217,15 +248,13 @@ export class Logger {
       proxy_requests: proxyResult.count,
       local_requests: localResult.count,
       api_requests: apiResult.count,
+      browser_extension_requests: browserExtensionResult.count,
       avg_scan_time_ms: Math.round(scanTimeResult.avg || 0),
       total_tokens: tokensResult.total,
       requests_last_hour: hourResult.count,
     };
   }
 
-  /**
-   * Gets entity breakdown
-   */
   getEntityStats(): Array<{ entity: string; count: number }> {
     const logs = this.db
       .prepare(`
@@ -250,9 +279,6 @@ export class Logger {
       .sort((a, b) => b.count - a.count);
   }
 
-  /**
-   * Cleans up old logs based on retention policy
-   */
   cleanup(): number {
     if (this.retentionDays <= 0) {
       return 0; // Keep forever
@@ -270,9 +296,6 @@ export class Logger {
     return result.changes;
   }
 
-  /**
-   * Closes database connection
-   */
   close(): void {
     this.db.close();
   }
@@ -291,7 +314,8 @@ export function getLogger(): Logger {
 export interface RequestLogData {
   timestamp: string;
   mode: "route" | "mask";
-  provider: "openai" | "anthropic" | "codex" | "local" | "api";
+  provider: RequestProvider;
+  source?: RequestSource;
   model: string;
   piiDetected: boolean;
   entities: string[];
@@ -299,9 +323,6 @@ export interface RequestLogData {
   scanTimeMs: number;
   promptTokens?: number;
   completionTokens?: number;
-  language: string;
-  languageFallback: boolean;
-  detectedLanguage?: string;
   maskedContent?: string;
   secretsDetected?: boolean;
   secretsMasked?: boolean;
@@ -313,6 +334,7 @@ export interface RequestLogData {
 export function logRequest(data: RequestLogData, userAgent: string | null): void {
   try {
     const config = getConfig();
+    const logger = getLogger();
 
     const shouldLogContent = shouldLogMaskedContent({
       maskedContent: data.maskedContent,
@@ -321,13 +343,15 @@ export function logRequest(data: RequestLogData, userAgent: string | null): void
       secretsMasked: data.secretsMasked,
     });
 
+    // Only log secret types if configured to do so
     const shouldLogSecretTypes =
       config.secrets_detection.log_detected_types && data.secretsTypes?.length;
 
-    enqueueLog({
+    logger.log({
       timestamp: data.timestamp,
       mode: data.mode,
       provider: data.provider,
+      source: data.source ?? normalizeRequestSource(data.provider),
       model: data.model,
       pii_detected: data.piiDetected,
       entities: data.entities.join(","),
@@ -336,9 +360,6 @@ export function logRequest(data: RequestLogData, userAgent: string | null): void
       prompt_tokens: data.promptTokens ?? null,
       completion_tokens: data.completionTokens ?? null,
       user_agent: userAgent,
-      language: data.language,
-      language_fallback: data.languageFallback,
-      detected_language: data.detectedLanguage ?? null,
       masked_content: shouldLogContent ? (data.maskedContent ?? null) : null,
       secrets_detected: data.secretsDetected !== undefined ? (data.secretsDetected ? 1 : 0) : null,
       secrets_types: shouldLogSecretTypes ? data.secretsTypes!.join(",") : null,
@@ -348,13 +369,4 @@ export function logRequest(data: RequestLogData, userAgent: string | null): void
   } catch (error) {
     console.error("Failed to log request:", error);
   }
-}
-
-export function initBatchedLogger(flushIntervalMs: number = 1000): void {
-  const db = getLogger();
-  initAsyncLogger((entries) => {
-    for (const entry of entries) {
-      db.log(entry);
-    }
-  }, flushIntervalMs, 50);
 }

@@ -18,19 +18,24 @@ export interface SecretsProcessResult<TRequest> {
   masked: boolean;
 }
 
+/** Placeholder strings already inserted by secrets masking (so later PII/denylist passes skip them). */
+export function secretPlaceholders<TRequest>(result: SecretsProcessResult<TRequest>): string[] {
+  return result.maskingContext ? Object.keys(result.maskingContext.mapping) : [];
+}
+
 /**
  * Process a request for secrets detection
  */
-export async function processSecretsRequest<TRequest, TResponse>(
+export function processSecretsRequest<TRequest, TResponse>(
   request: TRequest,
   config: SecretsDetectionConfig,
   extractor: RequestExtractor<TRequest, TResponse>,
-): Promise<SecretsProcessResult<TRequest>> {
+): SecretsProcessResult<TRequest> {
   if (!config.enabled) {
     return { blocked: false, request, masked: false };
   }
 
-  const detection = await detectSecretsInRequest(request, config, extractor);
+  const detection = detectSecretsInRequest(request, config, extractor);
 
   if (!detection.detected) {
     return { blocked: false, request, detection, masked: false };

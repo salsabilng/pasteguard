@@ -35,19 +35,18 @@ export function generateSecretPlaceholder(type: string, count: number): string {
  * Returns the position where it's safe to split, or -1 if entire string is safe
  */
 export function findPartialPlaceholderStart(text: string): number {
-  const placeholderStart = text.lastIndexOf(PLACEHOLDER_DELIMITERS.start);
+  const { start, end } = PLACEHOLDER_DELIMITERS;
+  const placeholderStart = text.lastIndexOf(start);
 
-  if (placeholderStart === -1) {
-    return -1; // No potential placeholder, entire string is safe
+  // An opened "[[" with no closing "]]" after it is an incomplete placeholder.
+  if (placeholderStart !== -1 && !text.slice(placeholderStart).includes(end)) {
+    return placeholderStart;
   }
 
-  // Check if there's a complete placeholder after the last [[
-  const afterStart = text.slice(placeholderStart);
-  const hasCompletePlaceholder = afterStart.includes(PLACEHOLDER_DELIMITERS.end);
-
-  if (hasCompletePlaceholder) {
-    return -1; // Placeholder is complete, entire string is safe
+  // A trailing "[" may be the first half of a "[[" that completes in the next chunk.
+  if (text.endsWith(start.slice(0, 1))) {
+    return text.length - 1;
   }
 
-  return placeholderStart; // Return position where partial placeholder starts
+  return -1; // Entire string is safe to emit
 }

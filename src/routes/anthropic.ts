@@ -1,24 +1,9 @@
-/**
- * Anthropic-compatible messages route
- *
- * Flow:
- * 1. Validate request
- * 2. Process secrets (detect, maybe block, mask, or route_local)
- * 3. Detect PII
- * 4. Route mode: if PII found, send to local provider
- * 5. Mask mode: mask PII if found, send to Anthropic, unmask response
- */
-
 import { zValidator } from "@hono/zod-validator";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { getConfig } from "../config";
 import type { PlaceholderContext } from "../masking/context";
-import {
-  anthropicExtractor,
-  extractAnthropicTextContent,
-  extractSystemText,
-} from "../masking/extractors/anthropic";
+import { anthropicExtractor } from "../masking/extractors/anthropic";
 import { unmaskResponse as unmaskPIIResponse } from "../pii/mask";
 import { callAnthropic } from "../providers/anthropic/client";
 import { createAnthropicUnmaskingStream } from "../providers/anthropic/stream-transformer";
@@ -29,17 +14,21 @@ import {
 } from "../providers/anthropic/types";
 import { callLocalAnthropic } from "../providers/local";
 import { unmaskSecretsResponse } from "../secrets/mask";
+import { formatMaskedSpansForLog, logScanRoles } from "../services/log-content";
 import { logRequest } from "../services/logger";
 import { detectPII, maskPII, type PIIDetectResult } from "../services/pii";
-import { processSecretsRequest, type SecretsProcessResult } from "../services/secrets";
-import { injectMetadataSystemMessage } from "../masking/context-enrichment";
-import { mergeContexts } from "../masking/context";
+import {
+  processSecretsRequest,
+  type SecretsProcessResult,
+  secretPlaceholders,
+} from "../services/secrets";
 import {
   createLogData,
   errorFormats,
   handleProviderError,
   setBlockedHeaders,
   setResponseHeaders,
+  setStreamingHeaders,
   toPIIHeaderData,
   toPIILogData,
   toSecretsHeaderData,
@@ -48,9 +37,6 @@ import {
 
 export const anthropicRoutes = new Hono();
 
-/**
- * POST /v1/messages - Anthropic-compatible messages endpoint
- */
 anthropicRoutes.post(
   "/v1/messages",
   zValidator("json", AnthropicRequestSchema, (result, c) => {
@@ -97,7 +83,7 @@ anthropicRoutes.post(
     }
 
     // Step 1: Process secrets
-    const secretsResult = await processSecretsRequest(
+    const secretsResult = processSecretsRequest(
       request,
       config.secrets_detection,
       anthropicExtractor,
@@ -112,27 +98,13 @@ anthropicRoutes.post(
       request = secretsResult.request;
     }
 
-    // Step 2: Detect PII (skip if disabled)
+    // Step 2: Detect PII and configured denylist terms
     let piiResult: PIIDetectResult;
-    if (!config.pii_detection.enabled) {
-      piiResult = {
-        detection: {
-          hasPII: false,
-          spanEntities: [],
-          allEntities: [],
-          scanTimeMs: 0,
-          language: "en",
-          languageFallback: false,
-        },
-        hasPII: false,
-      };
-    } else {
-      try {
-        piiResult = await detectPII(request, anthropicExtractor);
-      } catch (error) {
-        console.error("PII detection error:", error);
-        return respondDetectionError(c, request, secretsResult, startTime);
-      }
+    try {
+      piiResult = await detectPII(request, anthropicExtractor, secretPlaceholders(secretsResult));
+    } catch (error) {
+      console.error("PII detection error:", error);
+      return respondDetectionError(c, request, secretsResult, startTime);
     }
 
     // Step 3: Route mode - send to local if PII or secrets detected
@@ -174,11 +146,6 @@ anthropicRoutes.post(
   },
 );
 
-/**
- * Proxy all other requests to Anthropic
- *
- * Transparent header forwarding - all auth headers from client are passed through.
- */
 anthropicRoutes.all("/*", async (c) => {
   const config = getConfig();
 
@@ -224,21 +191,17 @@ interface LocalOptions {
 
 // --- Helpers ---
 
-function formatRequestForLog(request: AnthropicRequest): string {
-  const parts: string[] = [];
-
-  if (request.system) {
-    const systemText = extractSystemText(request.system);
-    if (systemText) parts.push(`[system] ${systemText}`);
-  }
-
-  for (const msg of request.messages) {
-    const text = extractAnthropicTextContent(msg.content);
-    const isMultimodal = Array.isArray(msg.content);
-    parts.push(`[${msg.role}${isMultimodal ? " multimodal" : ""}] ${text}`);
-  }
-
-  return parts.join("\n");
+function formatRequestForLog(request: AnthropicRequest): string | undefined {
+  const config = getConfig();
+  return formatMaskedSpansForLog(
+    anthropicExtractor.extractTexts(request),
+    logScanRoles({
+      piiRoles: config.pii_detection.scan_roles,
+      piiActive: config.pii_detection.enabled || config.masking.denylist.length > 0,
+      secretRoles: config.secrets_detection.scan_roles,
+      secretsActive: config.secrets_detection.enabled,
+    }),
+  );
 }
 
 // --- Response handlers ---
@@ -339,9 +302,7 @@ async function sendToLocal(c: Context, originalRequest: AnthropicRequest, opts: 
     );
 
     if (result.isStreaming) {
-      c.header("Content-Type", "text/event-stream");
-      c.header("Cache-Control", "no-cache");
-      c.header("Connection", "keep-alive");
+      setStreamingHeaders(c);
       return c.body(result.response as ReadableStream);
     }
 
@@ -367,13 +328,6 @@ async function sendToLocal(c: Context, originalRequest: AnthropicRequest, opts: 
 async function sendToAnthropic(c: Context, request: AnthropicRequest, opts: SendOptions) {
   const config = getConfig();
   const { startTime, piiResult, piiMaskingContext, secretsResult, maskedContent } = opts;
-
-  // Inject context enrichment system message if enabled
-  const enrichmentConfig = config.masking.context_enrichment;
-  if (enrichmentConfig.enabled && (piiMaskingContext || secretsResult.maskingContext)) {
-    const mergedContext = mergeContexts(piiMaskingContext, secretsResult.maskingContext);
-    request = injectMetadataSystemMessage(request, mergedContext, enrichmentConfig, "anthropic");
-  }
 
   setResponseHeaders(
     c,
@@ -436,9 +390,7 @@ function respondStreaming(
   secretsContext: PlaceholderContext | undefined,
 ) {
   const config = getConfig();
-  c.header("Content-Type", "text/event-stream");
-  c.header("Cache-Control", "no-cache");
-  c.header("Connection", "keep-alive");
+  setStreamingHeaders(c);
 
   if (piiMaskingContext || secretsContext) {
     const unmaskingStream = createAnthropicUnmaskingStream(

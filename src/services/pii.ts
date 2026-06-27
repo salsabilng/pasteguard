@@ -23,9 +23,11 @@ export interface PIIMaskResult<TRequest> {
 export async function detectPII<TRequest, TResponse>(
   request: TRequest,
   extractor: RequestExtractor<TRequest, TResponse>,
+  // Required (no default) so a new route can't silently skip the secrets placeholders.
+  knownPlaceholders: readonly string[],
 ): Promise<PIIDetectResult> {
   const detector = getPIIDetector();
-  const detection = await detector.analyzeRequest(request, extractor);
+  const detection = await detector.analyzeRequest(request, extractor, knownPlaceholders);
 
   return {
     detection,
@@ -62,7 +64,7 @@ export type { PIIDetectionResult, PIIEntity } from "../pii/detect";
 export { createMaskingContext } from "../pii/mask";
 
 /**
- * Check if Presidio is healthy
+ * Check if the detector is healthy
  */
 export async function healthCheck(): Promise<boolean> {
   const detector = getPIIDetector();

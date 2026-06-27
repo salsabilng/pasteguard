@@ -83,8 +83,15 @@ describe("findPartialPlaceholderStart", () => {
     expect(findPartialPlaceholderStart(text)).toBe(6);
   });
 
-  test("handles text ending with single bracket", () => {
-    // Single [ is not a placeholder start, so should return -1
-    expect(findPartialPlaceholderStart("Hello [")).toBe(-1);
+  test("buffers a trailing single bracket (first half of a split [[)", () => {
+    expect(findPartialPlaceholderStart("Hello [")).toBe(6);
+  });
+
+  test("buffers a trailing single bracket after a complete placeholder", () => {
+    expect(findPartialPlaceholderStart("[[PERSON_1]] [")).toBe(13);
+  });
+
+  test("buffers an incomplete placeholder whose closing ]] is split", () => {
+    expect(findPartialPlaceholderStart("Hi [[PERSON_1]")).toBe(3);
   });
 });

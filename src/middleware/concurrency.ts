@@ -28,8 +28,8 @@ class Semaphore {
   }
 
   release(): void {
-    const next = this.queue.shift();
-    if (next) {
+    if (this.queue.length > 0) {
+      const next = this.queue.shift()!;
       next.resolve();
     } else {
       this.permits++;
@@ -37,38 +37,31 @@ class Semaphore {
   }
 }
 
-let concurrencySemaphore: Semaphore | null = null;
-
-export function initConcurrencyLimiter(maxConcurrent: number): void {
-  concurrencySemaphore = new Semaphore(maxConcurrent);
-}
-
-export function getConcurrencySemaphore(): Semaphore | null {
-  return concurrencySemaphore;
-}
-
-export function createConcurrencyMiddleware(maxConcurrent: number, maxQueue: number, queueTimeoutMs: number) {
+export function createConcurrencyMiddleware(
+  maxConcurrent: number = 10,
+  maxQueue: number = 50,
+  queueTimeoutMs: number = 30000,
+) {
   const semaphore = new Semaphore(maxConcurrent);
-  const waitingCount = { value: 0 };
 
   return createMiddleware(async (c, next) => {
-    if (waitingCount.value >= maxQueue) {
-      return c.json({ error: { message: "Server busy, queue full", type: "queue_full" } }, 503);
+    const acquired = await semaphore.acquire(queueTimeoutMs);
+    if (!acquired) {
+      return c.json(
+        {
+          error: {
+            message: "Server is busy, too many concurrent requests",
+            type: "server_busy",
+          },
+        },
+        503,
+      );
     }
 
-    waitingCount.value++;
     try {
-      const acquired = await semaphore.acquire(queueTimeoutMs);
-      if (!acquired) {
-        return c.json({ error: { message: "Request timed out waiting for capacity", type: "queue_timeout" } }, 503);
-      }
-      try {
-        await next();
-      } finally {
-        semaphore.release();
-      }
+      await next();
     } finally {
-      waitingCount.value--;
+      semaphore.release();
     }
   });
 }

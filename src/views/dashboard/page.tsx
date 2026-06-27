@@ -96,6 +96,7 @@ const DashboardPage: FC = () => {
 							.bg-success { background: var(--color-success); }
 							.bg-success\\/10 { background: rgba(22, 163, 74, 0.1); }
 							.bg-teal { background: var(--color-teal); }
+							.bg-teal\\/10 { background: rgba(13, 148, 136, 0.1); }
 							.bg-anthropic { background: var(--color-anthropic); }
 							.bg-anthropic\\/10 { background: rgba(217, 119, 6, 0.1); }
 							.bg-error { background: var(--color-error); }
@@ -173,8 +174,6 @@ const DashboardPage: FC = () => {
 							/* Route mode visibility */
 							.route-only { display: none; }
 							[data-mode="route"] .route-only { display: block; }
-							[data-mode="route"] th.route-only,
-							[data-mode="route"] td.route-only { display: table-cell; }
 
 							/* Transitions */
 							.transition-all {
@@ -244,7 +243,7 @@ const Header: FC = () => (
 const StatsGrid: FC = () => (
 	<div
 		id="stats-grid"
-		class="grid grid-cols-5 gap-4 mb-8 [&[data-mode='route']]:grid-cols-7"
+		class="grid grid-cols-6 gap-4 mb-8 [&[data-mode='route']]:grid-cols-8"
 	>
 		<StatCard label="Total Requests" valueId="total-requests" />
 		<StatCard
@@ -255,6 +254,7 @@ const StatsGrid: FC = () => (
 			accent="accent"
 		/>
 		<StatCard label="API Requests" valueId="api-requests" accent="accent" />
+		<StatCard label="Extension" valueId="browser-extension-requests" accent="teal" />
 		<StatCard label="Avg PII Scan" valueId="avg-scan" accent="teal" />
 		<StatCard label="Requests/Hour" valueId="requests-hour" />
 		<StatCard
@@ -384,14 +384,8 @@ const LogsSection: FC = () => (
 							<th class="bg-elevated font-mono text-[0.65rem] font-medium uppercase tracking-widest text-text-muted px-4 py-3.5 text-left border-b border-border sticky top-0">
 								Status
 							</th>
-							<th class="route-only bg-elevated font-mono text-[0.65rem] font-medium uppercase tracking-widest text-text-muted px-4 py-3.5 text-left border-b border-border sticky top-0">
-								Provider
-							</th>
 							<th class="bg-elevated font-mono text-[0.65rem] font-medium uppercase tracking-widest text-text-muted px-4 py-3.5 text-left border-b border-border sticky top-0">
 								Model
-							</th>
-							<th class="bg-elevated font-mono text-[0.65rem] font-medium uppercase tracking-widest text-text-muted px-4 py-3.5 text-left border-b border-border sticky top-0">
-								Language
 							</th>
 							<th class="bg-elevated font-mono text-[0.65rem] font-medium uppercase tracking-widest text-text-muted px-4 py-3.5 text-left border-b border-border sticky top-0">
 								PII Entities
@@ -406,7 +400,7 @@ const LogsSection: FC = () => (
 					</thead>
 					<tbody id="logs-body">
 						<tr>
-							<td colSpan={9}>
+							<td colSpan={7}>
 								<div class="flex flex-col justify-center items-center p-10 gap-3">
 									<div class="loader-bars">
 										<div class="loader-bar" />
@@ -444,6 +438,7 @@ async function fetchStats() {
 
     document.getElementById('total-requests').textContent = data.total_requests.toLocaleString();
     document.getElementById('api-requests').textContent = data.api_requests.toLocaleString();
+    document.getElementById('browser-extension-requests').textContent = (data.browser_extension_requests || 0).toLocaleString();
     document.getElementById('avg-scan').textContent = data.avg_scan_time_ms + 'ms';
     document.getElementById('requests-hour').textContent = data.requests_last_hour.toLocaleString();
 
@@ -559,6 +554,19 @@ function renderEntityList(entities) {
   ).join('') + '</div>';
 }
 
+function formatSourceLabel(source) {
+  return source === 'browser_extension' ? 'Browser Extension' : source.toUpperCase();
+}
+
+function sourceBadgeClass(source) {
+  if (source === 'openai') return 'bg-info/10 text-info';
+  if (source === 'anthropic') return 'bg-anthropic/10 text-anthropic';
+  if (source === 'codex') return 'bg-success/10 text-success';
+  if (source === 'local') return 'bg-success/10 text-success';
+  if (source === 'browser_extension') return 'bg-teal/10 text-teal';
+  return 'bg-accent/10 text-accent';
+}
+
 async function fetchLogs() {
   try {
     const res = await fetch('/dashboard/api/logs?limit=50');
@@ -566,7 +574,7 @@ async function fetchLogs() {
     const tbody = document.getElementById('logs-body');
 
     if (data.logs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9"><div class="text-center py-10 text-text-muted"><div class="text-2xl mb-3 opacity-40">📋</div><div class="text-sm">No requests yet</div></div></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7"><div class="text-center py-10 text-text-muted"><div class="text-2xl mb-3 opacity-40">📋</div><div class="text-sm">No requests yet</div></div></td></tr>';
       return;
     }
 
@@ -576,15 +584,7 @@ async function fetchLogs() {
       const secretsTypes = log.secrets_types ? log.secrets_types.split(',').filter(s => s.trim()) : [];
       const secretsDetected = log.secrets_detected === 1;
       const isError = log.status_code && log.status_code >= 400;
-      const lang = log.language || 'en';
-      const detectedLang = log.detected_language;
-
-      const formatLang = (code) => code ? code.toUpperCase() : lang.toUpperCase();
-
-      // Show original→fallback when fallback was used (e.g. FR→EN)
-      const langDisplay = log.language_fallback && detectedLang
-        ? '<span class="text-accent" title="Language not supported, fallback used">' + formatLang(detectedLang) + '</span><span class="text-text-muted text-[0.5rem] mx-0.5">→</span><span>' + lang.toUpperCase() + '</span>'
-        : lang.toUpperCase();
+      const source = log.source;
       const logId = log.id || index;
       const isExpanded = expandedRowId === logId;
 
@@ -592,9 +592,7 @@ async function fetchLogs() {
         ? '<span class="inline-flex items-center px-2 py-1 rounded-sm font-mono text-[0.6rem] font-medium uppercase tracking-wide bg-error/10 text-error">' + log.status_code + '</span>'
         : '<span class="inline-flex items-center px-2 py-1 rounded-sm font-mono text-[0.6rem] font-medium uppercase tracking-wide bg-success/10 text-success">OK</span>';
 
-      const sourceBadge = log.provider === 'api'
-        ? '<span class="inline-flex items-center px-2 py-1 rounded-sm font-mono text-[0.6rem] font-medium uppercase tracking-wide bg-accent/10 text-accent">API</span>'
-        : '<span class="inline-flex items-center px-2 py-1 rounded-sm font-mono text-[0.6rem] font-medium uppercase tracking-wide bg-elevated text-text-muted">PROXY</span>';
+      const sourceBadge = '<span class="inline-flex items-center px-2 py-1 rounded-sm font-mono text-[0.6rem] font-medium uppercase tracking-wide ' + sourceBadgeClass(source) + '">' + formatSourceLabel(source) + '</span>';
 
       const mainRow =
         '<tr id="log-' + logId + '" class="cursor-pointer transition-colors hover:bg-elevated ' + (isExpanded ? 'log-row-expanded bg-elevated' : '') + '" onclick="toggleRow(' + logId + ')">' +
@@ -604,12 +602,7 @@ async function fetchLogs() {
           '</td>' +
           '<td class="text-sm px-4 py-3 border-b border-border-subtle align-middle">' + sourceBadge + '</td>' +
           '<td class="text-sm px-4 py-3 border-b border-border-subtle align-middle">' + statusBadge + '</td>' +
-          '<td class="route-only text-sm px-4 py-3 border-b border-border-subtle align-middle">' +
-            '<span class="inline-flex items-center px-2 py-1 rounded-sm font-mono text-[0.6rem] font-medium uppercase tracking-wide ' +
-              (log.provider === 'openai' ? 'bg-info/10 text-info' : log.provider === 'anthropic' ? 'bg-anthropic/10 text-anthropic' : 'bg-success/10 text-success') + '">' + log.provider + '</span>' +
-          '</td>' +
           '<td class="font-mono text-[0.7rem] text-text-secondary px-4 py-3 border-b border-border-subtle align-middle">' + log.model + '</td>' +
-          '<td class="font-mono text-[0.65rem] font-medium px-4 py-3 border-b border-border-subtle align-middle">' + langDisplay + '</td>' +
           '<td class="text-sm px-4 py-3 border-b border-border-subtle align-middle">' +
             (entities.length > 0
               ? '<div class="flex flex-wrap gap-1">' + entities.map(e => '<span class="font-mono text-[0.55rem] px-1.5 py-0.5 bg-elevated border border-border rounded-sm text-text-secondary">' + e.trim() + '</span>').join('') + '</div>'
@@ -629,7 +622,7 @@ async function fetchLogs() {
 
       const detailRow =
         '<tr id="detail-' + logId + '" class="' + (isExpanded ? 'detail-row-visible' : 'hidden') + '">' +
-          '<td colspan="9" class="p-0 bg-detail border-b border-border-subtle">' +
+          '<td colspan="7" class="p-0 bg-detail border-b border-border-subtle">' +
             '<div class="p-4 px-5 animate-slide-down">' + detailContent + '</div>' +
           '</td>' +
         '</tr>';

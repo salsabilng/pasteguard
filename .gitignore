@@ -39,4 +39,3 @@ coverage/
 test-*.ts
 test-*.sh
 test-*.js
-data/

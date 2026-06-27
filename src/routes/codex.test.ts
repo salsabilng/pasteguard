@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { Hono } from "hono";
 import { getConfig } from "../config";
-import { filterWhitelistedEntities, type PIIDetectionResult, PIIDetector } from "../pii/detect";
+import { filterAllowlistedEntities, type PIIDetectionResult, PIIDetector } from "../pii/detect";
 
 const mockAnalyzeRequest = mock<() => Promise<PIIDetectionResult>>(() =>
   Promise.resolve({
@@ -9,20 +9,17 @@ const mockAnalyzeRequest = mock<() => Promise<PIIDetectionResult>>(() =>
     spanEntities: [],
     allEntities: [],
     scanTimeMs: 0,
-    language: "en",
-    languageFallback: false,
   }),
 );
 const mockLogRequest = mock(() => {});
 
 mock.module("../pii/detect", () => ({
   PIIDetector,
-  filterWhitelistedEntities,
+  filterAllowlistedEntities,
   getPIIDetector: () => ({
     analyzeRequest: mockAnalyzeRequest,
     detectPII: mock(() => Promise.resolve([])),
     healthCheck: mock(() => Promise.resolve(true)),
-    getLanguageValidation: mock(() => undefined),
   }),
 }));
 
@@ -56,8 +53,6 @@ afterEach(() => {
     spanEntities: [],
     allEntities: [],
     scanTimeMs: 0,
-    language: "en",
-    languageFallback: false,
   });
   mockLogRequest.mockClear();
 });
@@ -106,8 +101,6 @@ describe("Codex proxy", () => {
       spanEntities: [[{ entity_type: "EMAIL_ADDRESS", start: 6, end: 22, score: 0.99 }]],
       allEntities: [{ entity_type: "EMAIL_ADDRESS", start: 6, end: 22, score: 0.99 }],
       scanTimeMs: 3,
-      language: "en",
-      languageFallback: false,
     });
 
     const calls: CapturedRequest[] = [];
@@ -153,6 +146,68 @@ describe("Codex proxy", () => {
     );
   });
 
+  test("masks and logs Codex MCP output fields", async () => {
+    const calls: CapturedRequest[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      calls.push({
+        url: request.url,
+        method: request.method,
+        headers: new Headers(request.headers),
+        body: await request.clone().text(),
+      });
+      return Promise.resolve(
+        Response.json({
+          output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
+        }),
+      );
+    }) as typeof fetch;
+
+    const res = await app.request("/codex/responses", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Find ANSWER_CODE in the file output.",
+              },
+            ],
+          },
+          {
+            type: "mcp_tool_call",
+            output: "mcp output\nDATABASE_URL=postgres://mcp:secret@db.example.com/app",
+          },
+        ],
+      }),
+      headers: {
+        Authorization: "Bearer chatgpt-token",
+        "Content-Type": "application/json",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+
+    const forwarded = JSON.parse(calls[0].body) as {
+      input: Array<{ output?: string }>;
+    };
+    expect(forwarded.input[1].output).toContain("[[CONNECTION_STRING_1]]");
+    expect(forwarded.input[1].output).not.toContain("postgres://mcp:secret");
+
+    const logCalls = mockLogRequest.mock.calls as unknown as Array<
+      [{ maskedContent?: string }, string | null]
+    >;
+    const logData = logCalls.at(-1)?.[0];
+    expect(logData?.maskedContent).toContain("[mcp result]");
+    expect(logData?.maskedContent).toContain("[[CONNECTION_STRING_1]]");
+    expect(logData?.maskedContent).not.toContain("postgres://");
+  });
+
   test("blocks sensitive Codex requests in route mode instead of forwarding them", async () => {
     config.mode = "route";
     mockAnalyzeRequest.mockResolvedValueOnce({
@@ -160,8 +215,6 @@ describe("Codex proxy", () => {
       spanEntities: [[{ entity_type: "EMAIL_ADDRESS", start: 6, end: 22, score: 0.99 }]],
       allEntities: [{ entity_type: "EMAIL_ADDRESS", start: 6, end: 22, score: 0.99 }],
       scanTimeMs: 3,
-      language: "en",
-      languageFallback: false,
     });
 
     let fetchCalled = false;
@@ -195,8 +248,6 @@ describe("Codex proxy", () => {
       spanEntities: [[{ entity_type: "EMAIL_ADDRESS", start: 6, end: 22, score: 0.99 }]],
       allEntities: [{ entity_type: "EMAIL_ADDRESS", start: 6, end: 22, score: 0.99 }],
       scanTimeMs: 3,
-      language: "en",
-      languageFallback: false,
     });
 
     globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) =>

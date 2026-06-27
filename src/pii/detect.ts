@@ -1,8 +1,7 @@
-import { getConfig } from "../config";
+import { type AllowlistPattern, type DenylistPattern, getConfig } from "../config";
 import { HEALTH_CHECK_TIMEOUT_MS } from "../constants/timeouts";
+import { overlaps, resolveConflicts } from "../masking/conflict-resolver";
 import type { RequestExtractor } from "../masking/types";
-import { getLanguageDetector, type SupportedLanguage } from "../services/language-detector";
-import { throttledPresidioCall } from "../middleware/presidio-throttle";
 
 export interface PIIEntity {
   entity_type: string;
@@ -11,24 +10,127 @@ export interface PIIEntity {
   score: number;
 }
 
-export function filterWhitelistedEntities(
+// Denylist matches are exact (operator-configured), so they carry full confidence.
+const DENYLIST_MATCH_SCORE = 1;
+
+function findLiteralMatches(text: string, pattern: string, type: string): PIIEntity[] {
+  const matches: PIIEntity[] = [];
+  let index = text.indexOf(pattern);
+
+  while (index !== -1) {
+    matches.push({
+      entity_type: type,
+      start: index,
+      end: index + pattern.length,
+      score: DENYLIST_MATCH_SCORE,
+    });
+    index = text.indexOf(pattern, index + pattern.length);
+  }
+
+  return matches;
+}
+
+function findRegexMatches(text: string, pattern: string, type: string): PIIEntity[] {
+  const regex = new RegExp(pattern, "g");
+  const matches: PIIEntity[] = [];
+
+  for (const match of text.matchAll(regex)) {
+    if (match.index === undefined || match[0].length === 0) continue;
+    matches.push({
+      entity_type: type,
+      start: match.index,
+      end: match.index + match[0].length,
+      score: DENYLIST_MATCH_SCORE,
+    });
+  }
+
+  return matches;
+}
+
+function placeholderSpans(
+  text: string,
+  placeholders: readonly string[],
+): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const placeholder of placeholders) {
+    let index = text.indexOf(placeholder);
+    while (index !== -1) {
+      spans.push({ start: index, end: index + placeholder.length });
+      index = text.indexOf(placeholder, index + placeholder.length);
+    }
+  }
+  return spans;
+}
+
+export function findDenylistedEntities(
+  text: string,
+  denylist: DenylistPattern[],
+  knownPlaceholders: readonly string[] = [],
+): PIIEntity[] {
+  if (denylist.length === 0 || !text) return [];
+
+  const matches = denylist.flatMap(({ pattern, type, regex }) =>
+    regex ? findRegexMatches(text, pattern, type) : findLiteralMatches(text, pattern, type),
+  );
+  if (matches.length === 0 || knownPlaceholders.length === 0) return matches;
+
+  // Drop matches inside an already-masked placeholder; re-masking its internals would corrupt the earlier mask.
+  const masked = placeholderSpans(text, knownPlaceholders);
+  if (masked.length === 0) return matches;
+  return matches.filter((m) => !masked.some((p) => overlaps(m, p)));
+}
+
+// Additive merge: a denylist match extends coverage but never shrinks an overlapping detector span; overlaps become their union and the detector type wins.
+export function mergeDenylistEntities(detected: PIIEntity[], denylisted: PIIEntity[]): PIIEntity[] {
+  if (denylisted.length === 0) return detected;
+
+  const resolvedDetector = resolveConflicts(detected);
+  const tagged = [
+    ...resolvedDetector.map((e) => ({ e, forced: false })),
+    ...denylisted.map((e) => ({ e, forced: true })),
+  ].sort((a, b) => a.e.start - b.e.start);
+
+  const result: { e: PIIEntity; forced: boolean }[] = [];
+  for (const item of tagged) {
+    const last = result[result.length - 1];
+    if (last && overlaps(item.e, last.e)) {
+      last.e = {
+        entity_type: last.forced && !item.forced ? item.e.entity_type : last.e.entity_type,
+        start: last.e.start,
+        end: Math.max(last.e.end, item.e.end),
+        score: Math.max(last.e.score, item.e.score),
+      };
+      last.forced = last.forced && item.forced;
+    } else {
+      result.push({ e: { ...item.e }, forced: item.forced });
+    }
+  }
+
+  return result.map((r) => r.e);
+}
+
+export function filterAllowlistedEntities(
   text: string,
   entities: PIIEntity[],
-  whitelist: string[],
+  allowlist: AllowlistPattern[],
 ): PIIEntity[] {
-  if (whitelist.length === 0) return entities;
+  if (allowlist.length === 0) return entities;
 
   return entities.filter((entity) => {
     const detectedText = text.slice(entity.start, entity.end);
-    return !whitelist.some(
-      (pattern) => pattern.includes(detectedText) || detectedText.includes(pattern),
-    );
+    return !allowlist.some(({ pattern, regex }) => {
+      if (regex) {
+        // Anchor to the whole entity so a partial match can't un-mask a larger detected span.
+        return new RegExp(`^(?:${pattern})$`).test(detectedText);
+      }
+      return pattern.includes(detectedText) || detectedText.includes(pattern);
+    });
   });
 }
 
 interface AnalyzeRequest {
   text: string;
-  language: string;
+  phone_regions?: string[];
   entities?: string[];
   score_threshold?: number;
 }
@@ -38,77 +140,93 @@ export interface PIIDetectionResult {
   spanEntities: PIIEntity[][];
   allEntities: PIIEntity[];
   scanTimeMs: number;
-  language: SupportedLanguage;
-  languageFallback: boolean;
-  detectedLanguage?: string;
-  presidioUrl?: string;
 }
 
 export class PIIDetector {
-  private presidioUrls: string[];
+  private detectorUrls: string[];
   private nextIndex = 0;
   private scoreThreshold: number;
   private entityTypes: string[];
-  private languageValidation?: { available: string[]; missing: string[] };
+  private phoneRegions: string[];
 
   constructor() {
     const config = getConfig();
-    // presidio_urls takes priority; fallback to single presidio_url
-    this.presidioUrls = config.pii_detection.presidio_urls ??
-      (config.pii_detection.presidio_url ? [config.pii_detection.presidio_url] : []);
-    if (this.presidioUrls.length === 0) {
-      throw new Error("No Presidio URLs configured. Set presidio_url or presidio_urls in config.yaml");
+    // detector_urls takes priority; fallback to single detector_url
+    this.detectorUrls = config.pii_detection.detector_urls ??
+      (config.pii_detection.detector_url ? [config.pii_detection.detector_url] : []);
+    if (this.detectorUrls.length === 0) {
+      throw new Error("No detector URLs configured. Set detector_url or detector_urls in config.yaml");
     }
     this.scoreThreshold = config.pii_detection.score_threshold;
     this.entityTypes = config.pii_detection.entities;
+    this.phoneRegions = config.pii_detection.phone_regions;
   }
 
-  private getNextPresidioUrl(): string {
-    const url = this.presidioUrls[this.nextIndex % this.presidioUrls.length];
-    this.nextIndex = (this.nextIndex + 1) % this.presidioUrls.length;
+  private getNextDetectorUrl(): string {
+    const url = this.detectorUrls[this.nextIndex % this.detectorUrls.length];
+    this.nextIndex = (this.nextIndex + 1) % this.detectorUrls.length;
     return url;
   }
 
-  async detectPII(text: string, language: SupportedLanguage): Promise<PIIEntity[]> {
-    const baseUrl = this.getNextPresidioUrl();
-    const analyzeEndpoint = `${baseUrl}/analyze`;
+  private async callDetector(url: string, request: AnalyzeRequest): Promise<PIIEntity[]> {
+    const analyzeEndpoint = `${url}/analyze`;
+    const response = await fetch(analyzeEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(30_000),
+    });
 
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Detector API error at ${url}: ${response.status} ${response.statusText} - ${errorText}`,
+      );
+    }
+
+    return (await response.json()) as PIIEntity[];
+  }
+
+  async detectPII(text: string): Promise<PIIEntity[]> {
     const request: AnalyzeRequest = {
       text,
-      language,
+      phone_regions: this.phoneRegions,
       entities: this.entityTypes,
       score_threshold: this.scoreThreshold,
     };
 
-    try {
-      const response = await throttledPresidioCall(() =>
-        fetch(analyzeEndpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(request),
-          signal: AbortSignal.timeout(30_000),
-        })
-      );
+    // Try detectors in round-robin order with failover
+    const startIdx = this.nextIndex % this.detectorUrls.length;
+    this.nextIndex = (this.nextIndex + 1) % this.detectorUrls.length;
+    const lastError: Error[] = [];
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `Presidio API error: ${response.status} ${response.statusText} - ${errorText}`,
-        );
-      }
-
-      return (await response.json()) as PIIEntity[];
-    } catch (error) {
-      if (error instanceof Error) {
-        if (error.message.includes("fetch")) {
-          throw new Error(`Failed to connect to Presidio at ${baseUrl}: ${error.message}`);
+    for (let i = 0; i < this.detectorUrls.length; i++) {
+      const idx = (startIdx + i) % this.detectorUrls.length;
+      const url = this.detectorUrls[idx];
+      try {
+        return await this.callDetector(url, request);
+      } catch (error) {
+        lastError.push(error instanceof Error ? error : new Error(String(error)));
+        if (this.detectorUrls.length === 1) {
+          // Only one detector, no failover
+          if (lastError[0].message.includes("fetch")) {
+            throw new Error(
+              `Failed to connect to the PII detector at ${url}: ${lastError[0].message}`,
+            );
+          }
+          throw lastError[0];
         }
-        throw error;
+        // Continue to next detector
+        console.warn(`[PII] Detector ${url} failed, trying next...`);
       }
-      throw new Error(`Unknown error during PII detection: ${error}`);
     }
+
+    // All detectors failed
+    throw new Error(
+      `All PII detectors failed: ${lastError.map((e) => e.message).join("; ")}`,
+    );
   }
 
   /**
@@ -117,103 +235,42 @@ export class PIIDetector {
   async analyzeRequest<TRequest, TResponse>(
     request: TRequest,
     extractor: RequestExtractor<TRequest, TResponse>,
+    knownPlaceholders: readonly string[] = [],
   ): Promise<PIIDetectionResult> {
     const startTime = Date.now();
     const config = getConfig();
 
+    if (!config.pii_detection.enabled && config.masking.denylist.length === 0) {
+      return {
+        hasPII: false,
+        spanEntities: [],
+        allEntities: [],
+        scanTimeMs: 0,
+      };
+    }
+
     // Extract all text spans from request
     const spans = extractor.extractTexts(request);
 
-    // Detect language from message content (skip system spans with messageIndex -1)
-    const messageSpans = spans.filter((span) => span.messageIndex >= 0);
-    const langText = messageSpans.map((s) => s.text).join("\n");
-    const langResult = langText
-      ? getLanguageDetector().detect(langText)
-      : { language: config.pii_detection.fallback_language, usedFallback: true };
-
-    // Build list of languages to scan: primary + cross-language fallbacks
-    const primaryLang = langResult.language;
-    const secondaryLangs: string[] = [];
-
-    // When primary is English, always also scan with Indonesian
-    // This catches Indonesian names/locations in English text
-    // Presidio will gracefully return [] if 'id' model is not loaded
-    if (primaryLang === "en") {
-      secondaryLangs.push("id");
-    }
-
-    const scanLanguages = [primaryLang, ...secondaryLangs];
-
-    // Detect PII for each span independently, across all scan languages
-    const scanRoles = config.pii_detection.scan_roles
-      ? new Set(config.pii_detection.scan_roles)
-      : null;
-    const whitelist = config.masking.whitelist;
-
-    // Track which Presidio URLs were used across all spans
-    const usedUrls: string[] = [];
+    // Detect PII for each span independently
+    const scanRoles = new Set(config.pii_detection.scan_roles);
+    const allowlist = config.masking.allowlist;
+    const denylist = config.masking.denylist;
 
     const spanEntities: PIIEntity[][] = await Promise.all(
       spans.map(async (span) => {
-        if (scanRoles && span.role && !scanRoles.has(span.role)) {
-          return [];
-        }
         if (!span.text) return [];
 
-        // Scan this span with ALL languages in parallel, merge results
-        const langResults = await Promise.allSettled(
-          scanLanguages.map(async (lang) => {
-            const url = this.getNextPresidioUrl();
-            usedUrls.push(url);
-            const analyzeEndpoint = `${url}/analyze`;
-            // Lower threshold for secondary languages to catch more entities
-            const threshold = lang === primaryLang ? this.scoreThreshold : this.scoreThreshold * 0.5;
-            const presidioReq: AnalyzeRequest = {
-              text: span.text,
-              language: lang,
-              entities: this.entityTypes,
-              score_threshold: threshold,
-            };
-            const response = await throttledPresidioCall(() =>
-              fetch(analyzeEndpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(presidioReq),
-                signal: AbortSignal.timeout(30_000),
-              })
-            );
-            if (!response.ok) {
-              const errText = await response.text();
-              throw new Error(`Presidio ${lang} ${response.status}: ${errText}`);
-            }
-            const rawEntities = (await response.json()) as PIIEntity[];
-            if (rawEntities.length > 0) {
-              console.log(`[PII-DEBUG] ${lang} raw: ${JSON.stringify(rawEntities.slice(0, 10))}`);
-            }
-            return { lang, entities: rawEntities };
-          }),
-        );
-
-        // Log results per language for debugging
-        const allSpanEntities: PIIEntity[] = [];
-        const seen = new Set<string>();
-        for (const result of langResults) {
-          if (result.status === "fulfilled") {
-            const { lang, entities } = result.value;
-            console.log(`[PII] ${lang} scan: ${entities.length} entities${entities.length > 0 ? " → " + entities.map(e => `${e.entity_type}:${span.text.slice(e.start, e.end)}`).join(", ") : ""}`);
-            for (const e of entities) {
-              const key = `${e.start}-${e.end}-${e.entity_type}`;
-              if (!seen.has(key)) {
-                seen.add(key);
-                allSpanEntities.push(e);
-              }
-            }
-          } else {
-            console.warn(`[PII] scan failed: ${result.reason?.message ?? result.reason}`);
-          }
+        if (!span.role || !scanRoles.has(span.role)) {
+          return [];
         }
 
-        return filterWhitelistedEntities(span.text, allSpanEntities, whitelist);
+        const denylistedEntities = findDenylistedEntities(span.text, denylist, knownPlaceholders);
+        const detectedEntities = config.pii_detection.enabled
+          ? await this.detectPII(span.text)
+          : [];
+        const filteredEntities = filterAllowlistedEntities(span.text, detectedEntities, allowlist);
+        return mergeDenylistEntities(filteredEntities, denylistedEntities);
       }),
     );
 
@@ -224,33 +281,27 @@ export class PIIDetector {
       spanEntities,
       allEntities,
       scanTimeMs: Date.now() - startTime,
-      language: langResult.language,
-      languageFallback: langResult.usedFallback,
-      detectedLanguage: langResult.detectedLanguage,
-      presidioUrl: usedUrls[0] ?? this.presidioUrls[0],
     };
   }
 
   async healthCheck(): Promise<boolean> {
-    // Check all Presidio instances — healthy if at least one responds
-    const results = await Promise.allSettled(
-      this.presidioUrls.map(async (url) => {
+    // Check all detectors are healthy
+    for (const url of this.detectorUrls) {
+      try {
         const response = await fetch(`${url}/health`, {
           method: "GET",
           signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
         });
-        return response.ok;
-      })
-    );
-    const healthyCount = results.filter((r) => r.status === "fulfilled" && r.value === true).length;
-    if (healthyCount < this.presidioUrls.length) {
-      console.warn(`[Presidio] ${healthyCount}/${this.presidioUrls.length} instances healthy`);
+        if (!response.ok) return false;
+      } catch {
+        return false;
+      }
     }
-    return healthyCount > 0;
+    return true;
   }
 
   /**
-   * Wait for Presidio to be ready (for docker-compose startup order)
+   * Wait for the detector to be ready (for docker-compose startup order)
    */
   async waitForReady(maxRetries = 30, delayMs = 1000): Promise<boolean> {
     for (let i = 1; i <= maxRetries; i++) {
@@ -260,7 +311,7 @@ export class PIIDetector {
       if (i < maxRetries) {
         // Show initial message, then every 5 attempts
         if (i === 1) {
-          process.stdout.write("[STARTUP] Waiting for Presidio");
+          process.stdout.write("[STARTUP] Waiting for the detector");
         } else if (i % 5 === 0) {
           process.stdout.write(".");
         }
@@ -269,67 +320,6 @@ export class PIIDetector {
     }
     process.stdout.write("\n");
     return false;
-  }
-
-  /**
-   * Test if a language is supported by trying to analyze with it
-   */
-  async isLanguageSupported(language: string): Promise<boolean> {
-    try {
-      const baseUrl = this.getNextPresidioUrl();
-      const response = await fetch(`${baseUrl}/analyze`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: "test",
-          language,
-          entities: ["PERSON"],
-        }),
-        signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
-      });
-
-      // If we get a response (even empty array), the language is supported
-      // If we get an error like "No matching recognizers", it's not supported
-      if (response.ok) {
-        return true;
-      }
-
-      const errorText = await response.text();
-      return !errorText.includes("No matching recognizers");
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Validate multiple languages, return available/missing
-   */
-  async validateLanguages(languages: string[]): Promise<{
-    available: string[];
-    missing: string[];
-  }> {
-    const results = await Promise.all(
-      languages.map(async (lang) => ({
-        lang,
-        supported: await this.isLanguageSupported(lang),
-      })),
-    );
-
-    this.languageValidation = {
-      available: results.filter((r) => r.supported).map((r) => r.lang),
-      missing: results.filter((r) => !r.supported).map((r) => r.lang),
-    };
-
-    return this.languageValidation;
-  }
-
-  /**
-   * Get the cached language validation result
-   */
-  getLanguageValidation(): { available: string[]; missing: string[] } | undefined {
-    return this.languageValidation;
   }
 }
 

@@ -1,29 +1,25 @@
-# PasteGuard - Docker Compose (All-in-One Image)
+# PasteGuard - Docker Compose
 #
-# Production:
+# Production (all-in-one: proxy + detector in one container):
 #   docker compose up -d
 #
-# Development (only Presidio, run Bun locally with hot-reload):
-#   docker compose up presidio -d
+# Development (detector in Docker, proxy locally with hot-reload):
+#   docker compose up detector -d
 #   bun run dev
 #
-# European languages:
-#   PASTEGUARD_TAG=eu docker compose up -d
-#
-# Custom languages (local build):
-#   LANGUAGES=en,de,ja docker compose up -d --build
+# The published image bundles the proxy and the PII detector. The `detector`
+# service below builds the `detector` target of the SAME docker/Dockerfile, so
+# there is one detector definition; it exists only for local development, where
+# the proxy runs from source (`bun run dev`) against it.
 
 services:
-  # Production: Full all-in-one
   pasteguard:
-    image: ghcr.io/sgasser/pasteguard:${PASTEGUARD_TAG:-en}
+    image: ghcr.io/sgasser/pasteguard:latest
     build:
       context: .
       dockerfile: docker/Dockerfile
-      args:
-        LANGUAGES: ${LANGUAGES:-en}
     ports:
-      - "3000:3000"
+      - "${PASTEGUARD_PORT:-3000}:3000"
     env_file:
       - path: .env
         required: false
@@ -32,25 +28,25 @@ services:
       - ./data:/pasteguard/data
     restart: unless-stopped
 
-  # Presidio Analyzer Instance 1
-#  presidio-1:
-#    image: microsoft/presidio-analyzer:latest
-#    environment:
-#      - ANALYZER_CONF_FILE=/conf/analyzer.yaml
-#    volumes:
-#      - ./docker/presidio:/conf:ro
-#    expose:
-#      - "3000"
-#    restart: unless-stopped
+  # Development only: the PII detector on its own, for `bun run dev`.
+  # Builds the shared `detector` stage of docker/Dockerfile (no duplicate
+  # Dockerfile). Point the local proxy at it with DETECTOR_URL=http://localhost:5002.
+  detector-1:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: detector
+    ports:
+      - "${PASTEGUARD_DETECTOR_PORT:-5002}:5002"
+    restart: unless-stopped
 
-  # Presidio Analyzer Instance 2
-#  presidio-2:
-#    image: ghcr.io/microsoft/presidio-analyzer:latest
-#    environment:
-#      - ANALYZER_CONF_FILE=/conf/analyzer.yaml
-#    volumes:
-#      - ./docker/presidio:/conf:ro
-#    expose:
-#      - "3000"
-#    restart: unless-stopped
-
+  detector-2:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: detector
+    ports:
+      - "5003:5002"
+    restart: unless-stopped

@@ -22,8 +22,14 @@ POST /api/mask
 curl -X POST http://localhost:3000/api/mask \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "Contact john@example.com or call 555-1234"
+    "text": "Contact john@example.com or call +1 415-555-1234"
   }'
+```
+
+Browser extensions can identify themselves in dashboard logs by sending:
+
+```http
+X-PasteGuard-Source: browser-extension
 ```
 
 ## Parameters
@@ -31,7 +37,6 @@ curl -X POST http://localhost:3000/api/mask \
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `text` | string | Yes | Text to scan and mask |
-| `language` | string | No | Language code for PII detection (auto-detected if not provided) |
 | `startFrom` | object | No | Counter values to continue numbering from previous calls |
 | `detect` | array | No | What to detect: `["pii"]`, `["secrets"]`, or `["pii", "secrets"]` (default: both) |
 
@@ -42,7 +47,7 @@ curl -X POST http://localhost:3000/api/mask \
   "masked": "Contact [[EMAIL_ADDRESS_1]] or call [[PHONE_NUMBER_1]]",
   "context": {
     "[[EMAIL_ADDRESS_1]]": "john@example.com",
-    "[[PHONE_NUMBER_1]]": "555-1234"
+    "[[PHONE_NUMBER_1]]": "+1 415-555-1234"
   },
   "counters": {
     "EMAIL_ADDRESS": 1,
@@ -51,9 +56,7 @@ curl -X POST http://localhost:3000/api/mask \
   "entities": [
     { "type": "EMAIL_ADDRESS", "placeholder": "[[EMAIL_ADDRESS_1]]" },
     { "type": "PHONE_NUMBER", "placeholder": "[[PHONE_NUMBER_1]]" }
-  ],
-  "language": "en",
-  "languageFallback": false
+  ]
 }
 ```
 
@@ -63,8 +66,6 @@ curl -X POST http://localhost:3000/api/mask \
 | `context` | Mapping of placeholder to original value (for client-side unmasking) |
 | `counters` | Final counter values per entity type |
 | `entities` | List of detected entities with their placeholders |
-| `language` | Language used for PII detection |
-| `languageFallback` | Whether the configured fallback language was used (auto-detection failed) |
 
 ## Detection Options
 
@@ -85,7 +86,7 @@ curl -X POST http://localhost:3000/api/mask \
 curl -X POST http://localhost:3000/api/mask \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "-----BEGIN RSA PRIVATE KEY-----\nMIIE...",
+    "text": "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----",
     "detect": ["secrets"]
   }'
 ```
@@ -94,7 +95,7 @@ curl -X POST http://localhost:3000/api/mask \
 curl -X POST http://localhost:3000/api/mask \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "Contact john@example.com with key -----BEGIN RSA PRIVATE KEY-----..."
+    "text": "Contact john@example.com with key -----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
   }'
 ```
 
@@ -190,7 +191,7 @@ const unmasked = unmask(llmResponse, context);
 
 ### Detection Error (503)
 
-Returned when Presidio or secrets detection is unavailable:
+Returned when the PII detector or secrets detection is unavailable:
 
 ```json
 {
@@ -198,7 +199,7 @@ Returned when Presidio or secrets detection is unavailable:
     "message": "PII detection failed",
     "type": "detection_error",
     "details": [
-      { "message": "Failed to connect to Presidio..." }
+      { "message": "Failed to connect to the PII detector..." }
     ]
   }
 }

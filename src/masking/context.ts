@@ -1,56 +1,20 @@
-/**
- * Placeholder context and text transformation utilities
- */
-
 import { findPartialPlaceholderStart } from "../masking/placeholders";
 import type { Span } from "./conflict-resolver";
 
-/**
- * Generic context for placeholder-based transformations
- * Used by both PII masking and secrets masking
- */
 export interface PlaceholderContext {
-  /** Maps placeholder -> original value */
   mapping: Record<string, string>;
-  /** Maps original value -> placeholder (for deduplication) */
   reverseMapping: Record<string, string>;
-  /** Counter per type for sequential numbering */
   counters: Record<string, number>;
-  /** Maps placeholder -> entity type */
-  entityTypes: Record<string, string>;
-  /** Maps placeholder -> confidence score */
-  scores: Record<string, number>;
 }
 
-/**
- * Result of masking text with placeholders
- * Used by both PII masking and secrets masking
- */
-export interface MaskResult {
-  /** Text with sensitive data replaced by placeholders */
-  masked: string;
-  /** Context for unmasking (maps placeholders to original values) */
-  context: PlaceholderContext;
-}
-
-/**
- * Creates a new placeholder context
- */
 export function createPlaceholderContext(): PlaceholderContext {
   return {
     mapping: {},
     reverseMapping: {},
     counters: {},
-    entityTypes: {},
-    scores: {},
   };
 }
 
-/**
- * Increments counter for type and generates placeholder using format function
- *
- * Shared counter logic for both PII masking and secrets masking.
- */
 export function incrementAndGenerate(
   type: string,
   context: PlaceholderContext,
@@ -61,15 +25,6 @@ export function incrementAndGenerate(
   return format(type, count);
 }
 
-/**
- * Restores placeholders in text with original values
- *
- * Generic function used by both PII unmasking and secrets unmasking.
- *
- * @param text - Text containing placeholders
- * @param context - Context with placeholder mappings
- * @param formatValue - Optional function to format restored values (e.g., add markers)
- */
 export function restorePlaceholders(
   text: string,
   context: PlaceholderContext,
@@ -90,19 +45,6 @@ export function restorePlaceholders(
   return result;
 }
 
-/**
- * Replaces items in text with placeholders
- *
- * Generic function used by both PII masking and secrets masking.
- * Handles: conflict resolution, placeholder assignment, and replacement.
- *
- * @param text - Text to process
- * @param items - Items with start/end positions to replace
- * @param context - Placeholder context for tracking mappings
- * @param getType - Function to get the type string from an item
- * @param generatePlaceholder - Function to generate placeholder for a type
- * @param resolveConflicts - Function to resolve overlapping items
- */
 export function replaceWithPlaceholders<T extends Span>(
   text: string,
   items: T[],
@@ -133,10 +75,6 @@ export function replaceWithPlaceholders<T extends Span>(
       placeholder = generatePlaceholder(getType(item), context);
       context.mapping[placeholder] = originalValue;
       context.reverseMapping[originalValue] = placeholder;
-      context.entityTypes[placeholder] = getType(item);
-      if ('score' in item) {
-        context.scores[placeholder] = (item as any).score;
-      }
     }
 
     itemPlaceholders.set(item, placeholder);
@@ -155,16 +93,6 @@ export function replaceWithPlaceholders<T extends Span>(
   return result;
 }
 
-/**
- * Processes a stream chunk, buffering partial placeholders
- *
- * Generic function used by both PII unmasking and secrets unmasking.
- *
- * @param buffer - Previous buffer content
- * @param newChunk - New chunk to process
- * @param context - Placeholder context
- * @param restore - Function to restore placeholders in text
- */
 export function processStreamChunk(
   buffer: string,
   newChunk: string,
@@ -193,13 +121,6 @@ export function processStreamChunk(
   };
 }
 
-/**
- * Flushes remaining buffer at end of stream
- *
- * @param buffer - Remaining buffer content
- * @param context - Placeholder context
- * @param restore - Function to restore placeholders in text
- */
 export function flushBuffer(
   buffer: string,
   context: PlaceholderContext,
@@ -207,24 +128,4 @@ export function flushBuffer(
 ): string {
   if (!buffer) return "";
   return restore(buffer, context);
-}
-
-/**
- * Merges multiple placeholder contexts into one
- */
-export function mergeContexts(
-  ...contexts: (PlaceholderContext | undefined)[]
-): PlaceholderContext {
-  const merged = createPlaceholderContext();
-  for (const ctx of contexts) {
-    if (!ctx) continue;
-    Object.assign(merged.mapping, ctx.mapping);
-    Object.assign(merged.reverseMapping, ctx.reverseMapping);
-    Object.assign(merged.entityTypes, ctx.entityTypes);
-    Object.assign(merged.scores, ctx.scores);
-    for (const [type, count] of Object.entries(ctx.counters)) {
-      merged.counters[type] = Math.max(merged.counters[type] ?? 0, count);
-    }
-  }
-  return merged;
 }

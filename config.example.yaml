@@ -12,6 +12,9 @@ server:
   port: 3000
   host: "0.0.0.0"
   # request_timeout: 600  # Seconds (0 = no timeout, default: 600)
+  # max_concurrent_requests: 10  # Max concurrent PII scans
+  # max_queue_size: 50  # Max queue when at capacity
+  # queue_timeout_ms: 30000  # Queue timeout in ms
 
 # Providers - API endpoints
 # Can be cloud (OpenAI, Anthropic, Azure) or self-hosted (vLLM, LiteLLM proxy, etc.).
@@ -51,103 +54,46 @@ masking:
   marker_text: "[protected]"
 
   # Text patterns that are never masked (protects against false positives)
-  # whitelist:
-  #   - "Company Name Inc."
+  # allowlist:
+  #   - pattern: "Company Name Inc."
+  #   - pattern: 'TEST-\d+'
+  #     regex: true
 
-  # Context enrichment - inject entity metadata as system prompt
-  # Gives the LLM context about what each placeholder represents
-  context_enrichment:
-    enabled: false
-    # system_prompt: |
-    #   The following placeholders represent redacted sensitive entities.
-    #   Use this metadata to understand context without needing original values.
-    #
-    #   {{entities}}
-    #
-    # Per-entity metadata (optional, overrides default)
-    # Available template variables:
-    #   {{length}}      - character count
-    #   {{word_count}}  - number of words
-    #   {{type}}        - entity type name
-    #   {{score}}       - confidence score
-    #   {{domain}}      - email domain (empty if not email)
-    #   {{prefix}}      - first N chars (set prefix_chars)
-    #   {{suffix}}      - last N chars (set suffix_chars)
-    #   {{char_set}}    - character classes present
-    #   {{slice:START:END}} - substring extraction
-    #
-    # entities:
-    #   PERSON:
-    #     description: "a person's full name"
-    #     fields:
-    #       word_count: "{{word_count}}"
-    #       length: "{{length}}"
-    #   EMAIL_ADDRESS:
-    #     description: "an email address"
-    #     fields:
-    #       domain: "{{domain}}"
-    #       length: "{{length}}"
-    #   CREDIT_CARD:
-    #     description: "a credit card number"
-    #     fields:
-    #       last_digits: "{{slice:-4:-1}}"
-    #       length: "{{length}}"
-# PII Detection settings (Microsoft Presidio)
-# Two Presidio instances run inside the container (ports 5002 + 5003)
-# Round-robin distributes requests across both for parallel PII analysis
+  # Text or regex patterns that are always masked, even if the detector misses them
+  # denylist:
+  #   - pattern: "ProjectX"
+  #     type: PROJECT_NAME
+  #   - pattern: 'CUST-\d{6}'
+  #     type: CUSTOMER_ID
+  #     regex: true
+
+# PII Detection settings (detector service, /analyze contract)
 pii_detection:
-  presidio_urls:
+  # URLs of the detector service (see detector/). Round-robin distributes
+  # requests across multiple instances for parallel PII analysis.
+  # Single instance (default):
+  #   detector_url: ${DETECTOR_URL:-http://localhost:5002}
+  # Dual instances (for higher throughput):
+  detector_urls:
     - http://localhost:5002
     - http://localhost:5003
 
-  # Supported languages for PII detection
-  # Auto-detects language from input text and uses appropriate model
-  #
-  # Docker: Uses PASTEGUARD_LANGUAGES env var (auto-configured per image)
-  # Local:  Uncomment the array below and comment out the env var line
-  #
-  # Available (24 languages): ca, zh, hr, da, nl, en, fi, fr, de, el,
-  #   it, ja, ko, lt, mk, nb, pl, pt, ro, ru, sl, es, sv, uk
-  # See docker/presidio/languages.yaml for full list with details
-  languages: ${PASTEGUARD_LANGUAGES:-en}
-  # languages:
-  #   - en
-  #   - de
-  #   - fr
-  #   - es
-  #   - it
-
-  # Fallback language if detected language is not in the list above
-  fallback_language: en
+  # Add regions only if you need national-format numbers; + numbers work globally.
+  phone_regions: []
+  # phone_regions: [US, GB, DE, IT, IN]
 
   score_threshold: 0.7  # Minimum confidence score (0.0 - 1.0)
 
-  # Entity types to detect
-  # See: https://microsoft.github.io/presidio/supported_entities/
+  # Entity types to return
   entities:
     - PERSON
+    - LOCATION
     - EMAIL_ADDRESS
     - PHONE_NUMBER
     - CREDIT_CARD
     - IBAN_CODE
     - IP_ADDRESS
-    - LOCATION
-    # - US_SSN
-    # - US_PASSPORT
-    # - CRYPTO
-    # - NRP  # National Registration Number
-    # - MEDICAL_LICENSE
-    # - URL
-
-  # Which message roles to scan for PII (optional)
-  # By default, all roles are scanned. Set this to scan only user-controlled content:
-  #   - user:      User messages (primary source of PII)
-  #   - tool:      Tool/function call results (may contain user data)
-  #   - function:  Legacy function results (OpenAI)
-  # scan_roles:
-  #   - user
-  #   - tool
-  #   - function
+    - VAT_CODE  # EU VAT number (any member state; requires country prefix)
 
 # Secrets Detection settings (Secrets Shield)
 # Detects private keys, API keys, tokens and other secret credentials in requests
@@ -161,36 +107,18 @@ secrets_detection:
   #   route_local:  Route to local provider (only works in route mode)
   action: mask
 
-  # Secret types to detect
-  # Private Keys (enabled by default):
-  #   - OPENSSH_PRIVATE_KEY: OpenSSH format (-----BEGIN OPENSSH PRIVATE KEY-----)
-  #   - PEM_PRIVATE_KEY:     PEM formats (RSA, PRIVATE KEY, ENCRYPTED PRIVATE KEY)
-  #
-  # API Keys (opt-in):
-  #   - API_KEY_SK:          Secret keys with sk- or sk_ prefix (OpenAI, Anthropic, Stripe, RevenueCat)
-  #   - API_KEY_AWS:         AWS Access Keys (AKIA...)
-  #   - API_KEY_GITHUB:      GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_)
-  #
-  # Tokens (opt-in):
-  #   - JWT_TOKEN:           JSON Web Tokens (eyJ...)
-  #   - BEARER_TOKEN:        Bearer tokens in Authorization-style contexts
-  #
-  # Environment Variables (opt-in):
-  #   - ENV_PASSWORD:        DB_PASSWORD=..., ADMIN_PWD=... (8+ char values)
-  #   - ENV_SECRET:          APP_SECRET=..., JWT_SECRET=... (8+ char values)
-  #   - CONNECTION_STRING:   postgres://user:pass@host, mongodb://...
+  # All supported secret types are enabled by default. Remove entries to narrow detection.
   entities:
     - OPENSSH_PRIVATE_KEY
     - PEM_PRIVATE_KEY
-    # Uncomment to detect API keys and tokens:
-    # - API_KEY_SK
-    # - API_KEY_AWS
-    # - API_KEY_GITHUB
-    # - JWT_TOKEN
-    # - BEARER_TOKEN
-    # - ENV_PASSWORD
-    # - ENV_SECRET
-    # - CONNECTION_STRING
+    - API_KEY_SK
+    - API_KEY_AWS
+    - API_KEY_GITHUB
+    - JWT_TOKEN
+    - BEARER_TOKEN
+    - ENV_PASSWORD
+    - ENV_SECRET
+    - CONNECTION_STRING
 
   # Maximum characters to scan per request (performance limit)
   # Note: Secrets placed after this limit won't be detected.
@@ -201,16 +129,6 @@ secrets_detection:
   # Log detected secret types (never logs raw secret content)
   log_detected_types: true
 
-  # Which message roles to scan for secrets (optional)
-  # By default, all roles are scanned. Set this to scan only user-controlled content:
-  #   - user:      User messages (primary source of secrets)
-  #   - tool:      Tool/function call results (may contain secrets)
-  #   - function:  Legacy function results (OpenAI)
-  # scan_roles:
-  #   - user
-  #   - tool
-  #   - function
-
 # Logging settings
 logging:
   # SQLite database for request logs
@@ -219,9 +137,9 @@ logging:
   # Log retention in days (0 = keep forever)
   retention_days: 30
 
-  # Log masked content for dashboard preview (default: true)
-  # Shows what was actually sent to provider with PII and secrets replaced by placeholders
-  # Disable if you don't want any content stored, even masked
+  # Store request text in the dashboard after masking (default: true)
+  # Disable if you don't want request text stored, even after masking.
+  # Only scanned roles (scan_roles) are stored, after PII and secrets are masked.
   log_masked_content: true
 
 # Dashboard settings

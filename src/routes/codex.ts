@@ -21,15 +21,21 @@ import {
   unmaskSecretsResponse,
   unmaskSecretsStreamChunk,
 } from "../secrets/mask";
+import { formatMaskedSpansForLog, logScanRoles } from "../services/log-content";
 import { logRequest } from "../services/logger";
 import { detectPII, maskPII, type PIIDetectResult } from "../services/pii";
-import { processSecretsRequest, type SecretsProcessResult } from "../services/secrets";
+import {
+  processSecretsRequest,
+  type SecretsProcessResult,
+  secretPlaceholders,
+} from "../services/secrets";
 import {
   createLogData,
   errorFormats,
   handleProviderError,
   setBlockedHeaders,
   setResponseHeaders,
+  setStreamingHeaders,
   toPIIHeaderData,
   toPIILogData,
   toSecretsHeaderData,
@@ -47,13 +53,6 @@ const CodexResponsesRequestSchema = z
   })
   .passthrough();
 
-/**
- * POST /responses
- *
- * Inspected Codex Responses route. This mirrors the OpenAI/Anthropic protected
- * endpoints: detect secrets/PII, mask before upstream, unmask streamed response,
- * and log the request in the dashboard.
- */
 codexRoutes.post(
   "/responses",
   zValidator("json", CodexResponsesRequestSchema, (result, c) => {
@@ -72,7 +71,7 @@ codexRoutes.post(
     let request = c.req.valid("json") as CodexResponsesRequest;
     const config = getConfig();
 
-    const secretsResult = await processSecretsRequest(request, config.secrets_detection, codexExtractor);
+    const secretsResult = processSecretsRequest(request, config.secrets_detection, codexExtractor);
     if (secretsResult.blocked) {
       return respondBlocked(c, request, secretsResult, startTime);
     }
@@ -81,25 +80,11 @@ codexRoutes.post(
     }
 
     let piiResult: PIIDetectResult;
-    if (!config.pii_detection.enabled) {
-      piiResult = {
-        detection: {
-          hasPII: false,
-          spanEntities: [],
-          allEntities: [],
-          scanTimeMs: 0,
-          language: config.pii_detection.fallback_language,
-          languageFallback: false,
-        },
-        hasPII: false,
-      };
-    } else {
-      try {
-        piiResult = await detectPII(request, codexExtractor);
-      } catch (error) {
-        console.error("PII detection error:", error);
-        return respondDetectionError(c, request, startTime);
-      }
+    try {
+      piiResult = await detectPII(request, codexExtractor, secretPlaceholders(secretsResult));
+    } catch (error) {
+      console.error("PII detection error:", error);
+      return respondDetectionError(c, request, startTime);
     }
 
     const shouldBlockRouteMode =
@@ -125,10 +110,6 @@ codexRoutes.post(
   },
 );
 
-/**
- * Wildcard pass-through proxy for /models and any future Codex endpoints that do
- * not carry prompt content.
- */
 codexRoutes.all("/*", (c) => {
   const config = getConfig();
   const normalizedBaseUrl = config.providers.codex.base_url.replace(/\/$/, "");
@@ -191,13 +172,14 @@ function getForwardHeaders(c: Context): Record<string, string> {
 }
 
 function formatCodexForLog(request: CodexResponsesRequest): string | undefined {
-  const spans = codexExtractor.extractTexts(request).filter((span) => span.role !== "system");
-  if (spans.length === 0) return undefined;
-
-  return spans
-    .map((span) => `[${span.role || "unknown"} ${span.path}] ${span.text}`)
-    .join("\n")
-    .slice(0, 20000);
+  const config = getConfig();
+  const scanRoles = logScanRoles({
+    piiRoles: config.pii_detection.scan_roles,
+    piiActive: config.pii_detection.enabled || config.masking.denylist.length > 0,
+    secretRoles: config.secrets_detection.scan_roles,
+    secretsActive: config.secrets_detection.enabled,
+  });
+  return formatMaskedSpansForLog(codexExtractor.extractTexts(request), scanRoles);
 }
 
 function respondBlocked(
@@ -380,9 +362,7 @@ function respondStreaming(
   secretsContext?: PlaceholderContext,
   maskingConfig = getConfig().masking,
 ) {
-  c.header("Content-Type", "text/event-stream");
-  c.header("Cache-Control", "no-cache");
-  c.header("Connection", "keep-alive");
+  setStreamingHeaders(c);
 
   if (piiContext || secretsContext) {
     return c.body(createCodexUnmaskingStream(stream, piiContext, maskingConfig, secretsContext));

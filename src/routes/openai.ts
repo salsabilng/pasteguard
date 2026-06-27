@@ -1,16 +1,3 @@
-/**
- * OpenAI-compatible chat completion route
- *
- * Flow:
- * 1. Validate request
- * 2. Process secrets (detect, maybe block or mask)
- * 3. Detect PII
- * 4. Based on mode:
- *    - mask: mask PII, send to OpenAI, unmask response
- *    - route: send to local (if PII) or OpenAI (if clean)
- * 5. Return response
- */
-
 import { zValidator } from "@hono/zod-validator";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -23,24 +10,26 @@ import { callLocal } from "../providers/local";
 import { callOpenAI, getOpenAIInfo, type ProviderResult } from "../providers/openai/client";
 import { createUnmaskingStream } from "../providers/openai/stream-transformer";
 import {
-  type OpenAIMessage,
   type OpenAIRequest,
   OpenAIRequestSchema,
   type OpenAIResponse,
 } from "../providers/openai/types";
 import { unmaskSecretsResponse } from "../secrets/mask";
+import { formatMaskedSpansForLog, logScanRoles } from "../services/log-content";
 import { logRequest } from "../services/logger";
 import { detectPII, maskPII, type PIIDetectResult } from "../services/pii";
-import { processSecretsRequest, type SecretsProcessResult } from "../services/secrets";
-import { injectMetadataSystemMessage } from "../masking/context-enrichment";
-import { mergeContexts } from "../masking/context";
-import { extractTextContent } from "../utils/content";
+import {
+  processSecretsRequest,
+  type SecretsProcessResult,
+  secretPlaceholders,
+} from "../services/secrets";
 import {
   createLogData,
   errorFormats,
   handleProviderError,
   setBlockedHeaders,
   setResponseHeaders,
+  setStreamingHeaders,
   toPIIHeaderData,
   toPIILogData,
   toSecretsHeaderData,
@@ -49,9 +38,6 @@ import {
 
 export const openaiRoutes = new Hono();
 
-/**
- * POST /v1/chat/completions
- */
 openaiRoutes.post(
   "/v1/chat/completions",
   zValidator("json", OpenAIRequestSchema, (result, c) => {
@@ -71,7 +57,7 @@ openaiRoutes.post(
     const config = getConfig();
 
     // Step 1: Process secrets
-    const secretsResult = await processSecretsRequest(request, config.secrets_detection, openaiExtractor);
+    const secretsResult = processSecretsRequest(request, config.secrets_detection, openaiExtractor);
 
     if (secretsResult.blocked) {
       return respondBlocked(c, request, secretsResult, startTime);
@@ -82,27 +68,13 @@ openaiRoutes.post(
       request = secretsResult.request;
     }
 
-    // Step 2: Detect PII (skip if disabled)
+    // Step 2: Detect PII and configured denylist terms
     let piiResult: PIIDetectResult;
-    if (!config.pii_detection.enabled) {
-      piiResult = {
-        detection: {
-          hasPII: false,
-          spanEntities: [],
-          allEntities: [],
-          scanTimeMs: 0,
-          language: "en",
-          languageFallback: false,
-        },
-        hasPII: false,
-      };
-    } else {
-      try {
-        piiResult = await detectPII(request, openaiExtractor);
-      } catch (error) {
-        console.error("PII detection error:", error);
-        return respondDetectionError(c, request, startTime);
-      }
+    try {
+      piiResult = await detectPII(request, openaiExtractor, secretPlaceholders(secretsResult));
+    } catch (error) {
+      console.error("PII detection error:", error);
+      return respondDetectionError(c, request, startTime);
     }
 
     // Step 3: Process based on mode
@@ -142,9 +114,6 @@ openaiRoutes.post(
   },
 );
 
-/**
- * Wildcard proxy for /models, /embeddings, /audio/*, /images/*, etc.
- */
 openaiRoutes.all("/*", (c) => {
   const config = getConfig();
   const { baseUrl } = getOpenAIInfo(config.providers.openai);
@@ -181,14 +150,17 @@ interface LocalOptions {
 
 // --- Helpers ---
 
-function formatMessagesForLog(messages: OpenAIMessage[]): string {
-  return messages
-    .map((m) => {
-      const text = extractTextContent(m.content);
-      const isMultimodal = Array.isArray(m.content);
-      return `[${m.role}${isMultimodal ? " multimodal" : ""}] ${text}`;
-    })
-    .join("\n");
+function formatRequestForLog(request: OpenAIRequest): string | undefined {
+  const config = getConfig();
+  return formatMaskedSpansForLog(
+    openaiExtractor.extractTexts(request),
+    logScanRoles({
+      piiRoles: config.pii_detection.scan_roles,
+      piiActive: config.pii_detection.enabled || config.masking.denylist.length > 0,
+      secretRoles: config.secrets_detection.scan_roles,
+      secretsActive: config.secrets_detection.enabled,
+    }),
+  );
 }
 
 // --- Response handlers ---
@@ -251,18 +223,10 @@ function respondDetectionError(c: Context, body: OpenAIRequest, startTime: numbe
 
 async function sendToOpenAI(c: Context, originalRequest: OpenAIRequest, opts: OpenAIOptions) {
   const config = getConfig();
-  const { request: origRequest, piiResult, piiMaskingContext, secretsResult, startTime, authHeader } = opts;
-  let request = origRequest;
-
-  // Inject context enrichment system message if enabled
-  const enrichmentConfig = config.masking.context_enrichment;
-  if (enrichmentConfig.enabled && (piiMaskingContext || secretsResult.maskingContext)) {
-    const mergedContext = mergeContexts(piiMaskingContext, secretsResult.maskingContext);
-    request = injectMetadataSystemMessage(request, mergedContext, enrichmentConfig, "openai");
-  }
+  const { request, piiResult, piiMaskingContext, secretsResult, startTime, authHeader } = opts;
 
   const maskedContent =
-    piiResult.hasPII || secretsResult.masked ? formatMessagesForLog(request.messages) : undefined;
+    piiResult.hasPII || secretsResult.masked ? formatRequestForLog(request) : undefined;
 
   setResponseHeaders(
     c,
@@ -331,7 +295,7 @@ async function sendToLocal(c: Context, originalRequest: OpenAIRequest, opts: Loc
   }
 
   const maskedContent =
-    piiResult.hasPII || secretsResult.masked ? formatMessagesForLog(request.messages) : undefined;
+    piiResult.hasPII || secretsResult.masked ? formatRequestForLog(request) : undefined;
 
   setResponseHeaders(
     c,
@@ -357,9 +321,7 @@ async function sendToLocal(c: Context, originalRequest: OpenAIRequest, opts: Loc
     );
 
     if (result.isStreaming) {
-      c.header("Content-Type", "text/event-stream");
-      c.header("Cache-Control", "no-cache");
-      c.header("Connection", "keep-alive");
+      setStreamingHeaders(c);
       return c.body(result.response as ReadableStream);
     }
 
@@ -391,9 +353,7 @@ function respondStreaming(
   secretsContext?: PlaceholderContext,
   maskingConfig?: MaskingConfig,
 ) {
-  c.header("Content-Type", "text/event-stream");
-  c.header("Cache-Control", "no-cache");
-  c.header("Connection", "keep-alive");
+  setStreamingHeaders(c);
 
   if (piiContext || secretsContext) {
     const stream = createUnmaskingStream(

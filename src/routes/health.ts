@@ -1,31 +1,31 @@
 import { Hono } from "hono";
-import { getWorkerPoolStats } from "../secrets/worker-pool";
 import { getConfig } from "../config";
 import { checkLocalHealth } from "../providers/local";
-import { healthCheck as checkPresidio } from "../services/pii";
+import { healthCheck as checkDetector } from "../services/pii";
 
 export const healthRoutes = new Hono();
 
-healthRoutes.get("/health/workers", (c) => {
-  return c.json(getWorkerPoolStats());
+healthRoutes.get("/", (c) => {
+  const config = getConfig();
+  return c.redirect(config.dashboard.enabled ? "/dashboard" : "/health");
 });
 
 healthRoutes.get("/health", async (c) => {
   const config = getConfig();
   const piiEnabled = config.pii_detection.enabled;
 
-  const [presidioHealth, localHealth] = await Promise.all([
-    piiEnabled ? checkPresidio() : Promise.resolve(true),
+  const [detectorHealth, localHealth] = await Promise.all([
+    piiEnabled ? checkDetector() : Promise.resolve(true),
     config.mode === "route" && config.local
       ? checkLocalHealth(config.local)
       : Promise.resolve(true),
   ]);
 
-  const isHealthy = piiEnabled ? presidioHealth : true;
+  const isHealthy = piiEnabled ? detectorHealth : true;
 
   const services: Record<string, string> = {};
   if (piiEnabled) {
-    services.presidio = presidioHealth ? "up" : "down";
+    services.detector = detectorHealth ? "up" : "down";
   }
 
   if (config.mode === "route" && config.local) {

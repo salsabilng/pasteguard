@@ -46,12 +46,24 @@ providers:
 masking:
   show_markers: false
   marker_text: "[protected]"
+  allowlist:
+    - pattern: "Company Name Inc."
+    - pattern: 'TEST-\d+'
+      regex: true
+  denylist:
+    - pattern: "ProjectX"
+      type: PROJECT_NAME
+    - pattern: 'CUST-\d{6}'
+      type: CUSTOMER_ID
+      regex: true
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `show_markers` | `false` | Add visual markers around unmasked values |
 | `marker_text` | `[protected]` | Marker text if enabled |
+| `allowlist` | `[]` | Text patterns that are never masked; set `regex: true` for regex patterns |
+| `denylist` | `[]` | Text patterns masked with the configured `type`; set `regex: true` for regex patterns |
 
 ## Response Headers
 
@@ -62,13 +74,6 @@ X-PasteGuard-Mode: mask
 X-PasteGuard-Provider: openai
 X-PasteGuard-PII-Detected: true
 X-PasteGuard-PII-Masked: true
-X-PasteGuard-Language: en
-```
-
-If the detected language wasn't configured and fell back to `fallback_language`:
-
-```
-X-PasteGuard-Language-Fallback: true
 ```
 
 ## Streaming Support

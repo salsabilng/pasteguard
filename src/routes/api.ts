@@ -9,12 +9,16 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { getConfig, type SecretsDetectionConfig } from "../config";
 import { createPlaceholderContext, type PlaceholderContext } from "../masking/context";
-import { filterWhitelistedEntities, getPIIDetector } from "../pii/detect";
+import {
+  filterAllowlistedEntities,
+  findDenylistedEntities,
+  getPIIDetector,
+  mergeDenylistEntities,
+} from "../pii/detect";
 import { mask as maskPII } from "../pii/mask";
 import { detectSecrets } from "../secrets/detect";
 import { maskSecrets } from "../secrets/mask";
-import { getLanguageDetector, type SupportedLanguage } from "../services/language-detector";
-import { logRequest } from "../services/logger";
+import { logRequest, normalizeRequestSource } from "../services/logger";
 import { createLogData } from "./utils";
 
 export const apiRoutes = new Hono();
@@ -22,7 +26,6 @@ export const apiRoutes = new Hono();
 // Request schema
 const MaskRequestSchema = z.object({
   text: z.string().trim().min(1, "text is required"),
-  language: z.string().optional(),
   startFrom: z.record(z.string(), z.number()).optional(),
   detect: z.array(z.enum(["pii", "secrets"])).optional(),
 });
@@ -40,8 +43,6 @@ interface MaskResponse {
   context: Record<string, string>;
   counters: Record<string, number>;
   entities: MaskEntity[];
-  language: string;
-  languageFallback: boolean;
 }
 
 /**
@@ -78,6 +79,7 @@ apiRoutes.post("/mask", async (c) => {
   const startTime = Date.now();
   const config = getConfig();
   const userAgent = c.req.header("user-agent") || null;
+  const source = normalizeRequestSource("api", c.req.header("x-pasteguard-source"));
 
   // Parse and validate request
   const body = await c.req.json().catch(() => null);
@@ -112,81 +114,13 @@ apiRoutes.post("/mask", async (c) => {
     }
   }
 
-  // Detect language (use provided or auto-detect)
-  let language: SupportedLanguage;
-  let languageFallback = false;
-  if (
-    request.language &&
-    config.pii_detection.languages.includes(request.language as SupportedLanguage)
-  ) {
-    language = request.language as SupportedLanguage;
-  } else {
-    const langResult = getLanguageDetector().detect(request.text);
-    language = langResult.language;
-    languageFallback = langResult.usedFallback;
-  }
-
   let maskedText = request.text;
   const allEntities: MaskEntity[] = [];
   const piiEntityTypes: string[] = [];
   const secretTypes: string[] = [];
   let scanTimeMs = 0;
 
-  // Detect and mask PII
-  if (detectPII) {
-    try {
-      const piiStartTime = Date.now();
-      const detector = getPIIDetector();
-      const piiEntities = await detector.detectPII(maskedText, language);
-      scanTimeMs = Date.now() - piiStartTime;
-
-      // Apply whitelist filtering
-      const filteredEntities = filterWhitelistedEntities(
-        maskedText,
-        piiEntities,
-        config.masking.whitelist,
-      );
-
-      // Capture counters before masking to track new entities
-      const countersBefore = { ...context.counters };
-      const piiResult = maskPII(maskedText, filteredEntities, context);
-      maskedText = piiResult.masked;
-      allEntities.push(...extractEntities(countersBefore, piiResult.context));
-
-      // Collect unique entity types for logging
-      for (const entity of filteredEntities) {
-        if (!piiEntityTypes.includes(entity.entity_type)) {
-          piiEntityTypes.push(entity.entity_type);
-        }
-      }
-    } catch (error) {
-      // Log the error
-      logRequest(
-        createLogData({
-          provider: "api",
-          model: "mask",
-          startTime,
-          pii: { hasPII: false, entityTypes: [], language, languageFallback, scanTimeMs: 0 },
-          statusCode: 503,
-          errorMessage: error instanceof Error ? error.message : "PII detection failed",
-        }),
-        userAgent,
-      );
-
-      return c.json(
-        {
-          error: {
-            message: "PII detection failed",
-            type: "detection_error",
-            details: [{ message: error instanceof Error ? error.message : "Unknown error" }],
-          },
-        },
-        503,
-      );
-    }
-  }
-
-  // Detect and mask secrets
+  // Secrets before PII (as in the provider routes): otherwise PII masks a connection string's "pass@host" as an email and the CONNECTION_STRING pattern can't match.
   if (detectSecretsFlag && config.secrets_detection.enabled) {
     try {
       // Create a config for detection (always use mask action for API)
@@ -196,6 +130,7 @@ apiRoutes.post("/mask", async (c) => {
         entities: config.secrets_detection.entities,
         max_scan_chars: config.secrets_detection.max_scan_chars,
         log_detected_types: false,
+        scan_roles: config.secrets_detection.scan_roles,
       };
 
       const secretsResult = detectSecrets(maskedText, secretsConfig);
@@ -219,13 +154,12 @@ apiRoutes.post("/mask", async (c) => {
       logRequest(
         createLogData({
           provider: "api",
+          source,
           model: "mask",
           startTime,
           pii: {
             hasPII: piiEntityTypes.length > 0,
             entityTypes: piiEntityTypes,
-            language,
-            languageFallback,
             scanTimeMs,
           },
           statusCode: 503,
@@ -247,17 +181,74 @@ apiRoutes.post("/mask", async (c) => {
     }
   }
 
+  // Detect and mask PII
+  if (detectPII) {
+    try {
+      const piiStartTime = Date.now();
+      const detector = getPIIDetector();
+      const piiEntities = config.pii_detection.enabled ? await detector.detectPII(maskedText) : [];
+      scanTimeMs = Date.now() - piiStartTime;
+
+      const filteredEntities = filterAllowlistedEntities(
+        maskedText,
+        piiEntities,
+        config.masking.allowlist,
+      );
+      const entitiesToMask = mergeDenylistEntities(
+        filteredEntities,
+        findDenylistedEntities(maskedText, config.masking.denylist, Object.keys(context.mapping)),
+      );
+
+      // Capture counters before masking to track new entities
+      const countersBefore = { ...context.counters };
+      const piiResult = maskPII(maskedText, entitiesToMask, context);
+      maskedText = piiResult.masked;
+      allEntities.push(...extractEntities(countersBefore, piiResult.context));
+
+      // Collect unique entity types for logging
+      for (const entity of entitiesToMask) {
+        if (!piiEntityTypes.includes(entity.entity_type)) {
+          piiEntityTypes.push(entity.entity_type);
+        }
+      }
+    } catch (error) {
+      // Log the error
+      logRequest(
+        createLogData({
+          provider: "api",
+          source,
+          model: "mask",
+          startTime,
+          pii: { hasPII: false, entityTypes: [], scanTimeMs: 0 },
+          statusCode: 503,
+          errorMessage: error instanceof Error ? error.message : "PII detection failed",
+        }),
+        userAgent,
+      );
+
+      return c.json(
+        {
+          error: {
+            message: "PII detection failed",
+            type: "detection_error",
+            details: [{ message: error instanceof Error ? error.message : "Unknown error" }],
+          },
+        },
+        503,
+      );
+    }
+  }
+
   // Log successful request
   logRequest(
     createLogData({
       provider: "api",
+      source,
       model: "mask",
       startTime,
       pii: {
         hasPII: piiEntityTypes.length > 0,
         entityTypes: piiEntityTypes,
-        language,
-        languageFallback,
         scanTimeMs,
       },
       secrets:
@@ -274,8 +265,6 @@ apiRoutes.post("/mask", async (c) => {
     context: context.mapping,
     counters: { ...context.counters },
     entities: allEntities,
-    language,
-    languageFallback,
   };
 
   return c.json(response);

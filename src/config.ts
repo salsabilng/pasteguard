@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { SUPPORTED_LANGUAGES } from "./constants/languages";
 
 // Schema definitions
 
@@ -30,83 +29,132 @@ const CodexProviderSchema = z.object({
   base_url: z.string().url().default("https://chatgpt.com/backend-api/codex"),
 });
 
-const DEFAULT_WHITELIST = ["You are Claude Code, Anthropic's official CLI for Claude."];
+const DEFAULT_ALLOWLIST = [
+  { pattern: "You are Claude Code, Anthropic's official CLI for Claude.", regex: false },
+];
 
-const ContextEnrichmentEntitySchema = z.object({
-  description: z.string(),
-  fields: z.record(z.string()).default({}),
-  prefix_chars: z.coerce.number().int().min(0).max(10).optional(),
-  suffix_chars: z.coerce.number().int().min(0).max(10).optional(),
-});
+function validateRegexPattern(
+  pattern: string,
+  regex: boolean,
+  ctx: z.RefinementCtx,
+  message: string,
+): void {
+  if (!regex) return;
 
-const ContextEnrichmentSchema = z.object({
-  enabled: z.boolean().default(false),
-  system_prompt: z
+  let compiled: RegExp;
+  try {
+    compiled = new RegExp(pattern, "g");
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["pattern"],
+      message,
+    });
+    return;
+  }
+
+  // Reject patterns that match the empty string: zero-length matches are skipped, so they mask nothing.
+  if (compiled.test("")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["pattern"],
+      message: `${message} (must not match the empty string)`,
+    });
+  }
+}
+
+const AllowlistPatternSchema = z.union([
+  z
     .string()
-    .default(
-      'The following placeholders represent redacted sensitive entities.\n' +
-        'Use this metadata to understand context without needing original values.\n\n{{entities}}\n',
-    ),
-  entities: z.record(ContextEnrichmentEntitySchema).default({}),
-  default: ContextEnrichmentEntitySchema.default({
-    description: 'a redacted {{type}} entity',
-    fields: { length: '{{length}}' },
-  }),
-});
+    .min(1)
+    .transform((pattern) => ({ pattern, regex: false })),
+  z
+    .object({
+      pattern: z.string().min(1),
+      regex: z.boolean().default(false),
+    })
+    .superRefine((entry, ctx) => {
+      validateRegexPattern(entry.pattern, entry.regex, ctx, "Invalid allowlist regex pattern");
+    }),
+]);
+
+const DenylistPatternSchema = z
+  .object({
+    pattern: z.string().min(1),
+    type: z.string().min(1),
+    regex: z.boolean().default(false),
+  })
+  .superRefine((entry, ctx) => {
+    validateRegexPattern(entry.pattern, entry.regex, ctx, "Invalid denylist regex pattern");
+  });
 
 const MaskingSchema = z.object({
   show_markers: z.boolean().default(false),
   marker_text: z.string().default("[protected]"),
-  whitelist: z
-    .array(z.string())
+  allowlist: z
+    .array(AllowlistPatternSchema)
     .default([])
-    .transform((arr) => [...DEFAULT_WHITELIST, ...arr]),
-  context_enrichment: ContextEnrichmentSchema.default({}),
+    .transform((arr) => [...DEFAULT_ALLOWLIST, ...arr]),
+  denylist: z.array(DenylistPatternSchema).default([]),
 });
 
-const LanguageEnum = z.enum(SUPPORTED_LANGUAGES);
+const PhoneRegionSchema = z
+  .string()
+  .trim()
+  .transform((value) => value.toUpperCase())
+  .pipe(z.string().regex(/^[A-Z]{2}$/, "Expected ISO 3166-1 alpha-2 region code"));
 
-// Accept either array or comma-separated string for languages
-// This allows using env vars like PASTEGUARD_LANGUAGES=en,de,fr
-const LanguagesSchema = z
-  .union([z.array(LanguageEnum), z.string()])
+const PhoneRegionsSchema = z
+  .union([z.array(PhoneRegionSchema), z.string()])
   .transform((val) => {
     if (Array.isArray(val)) return val;
-    return val.split(",").map((s) => s.trim()) as (typeof SUPPORTED_LANGUAGES)[number][];
+    return val
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
   })
-  .pipe(z.array(LanguageEnum))
-  .default(["en"]);
+  .pipe(z.array(PhoneRegionSchema))
+  .default([]);
+
+const KNOWN_SCAN_ROLES = ["user", "tool", "function", "mcp", "system", "developer", "assistant"];
+const DEFAULT_SCAN_ROLES = ["user", "tool", "function", "mcp"];
+const scanRolesField = z
+  .array(
+    z.string().refine((role) => KNOWN_SCAN_ROLES.includes(role), {
+      message: `Unknown scan role (allowed: ${KNOWN_SCAN_ROLES.join(", ")})`,
+    }),
+  )
+  .default([...DEFAULT_SCAN_ROLES])
+  .transform((roles) => (roles.length > 0 ? roles : [...DEFAULT_SCAN_ROLES]));
 
 const PIIDetectionSchema = z.object({
   enabled: z.boolean().default(true),
-  presidio_url: z.string().url().optional(),
-  presidio_urls: z.array(z.string().url()).optional(),
-  languages: LanguagesSchema,
-  fallback_language: LanguageEnum.default("en"),
+  detector_url: z.string().url().optional(),
+  detector_urls: z.array(z.string().url()).optional(),
+  phone_regions: PhoneRegionsSchema,
   score_threshold: z.coerce.number().min(0).max(1).default(0.7),
   entities: z
     .array(z.string())
     .default([
       "PERSON",
+      "LOCATION",
       "EMAIL_ADDRESS",
       "PHONE_NUMBER",
       "CREDIT_CARD",
       "IBAN_CODE",
       "IP_ADDRESS",
-      "LOCATION",
+      "VAT_CODE",
     ]),
-  scan_roles: z.array(z.string()).optional(),
+  scan_roles: scanRolesField,
 });
 
 const ServerSchema = z.object({
   port: z.coerce.number().int().min(1).max(65535).default(3000),
   host: z.string().default("0.0.0.0"),
   request_timeout: z.coerce.number().int().min(0).default(600),
-  max_concurrent_requests: z.coerce.number().int().min(0).default(50),
-  max_queue_size: z.coerce.number().int().min(0).default(100),
+  max_concurrent_requests: z.coerce.number().int().min(1).default(10),
+  max_queue_size: z.coerce.number().int().min(0).default(50),
   queue_timeout_ms: z.coerce.number().int().min(0).default(30000),
-  presidio_max_concurrent: z.coerce.number().int().min(0).default(10),
-  async_log_flush_ms: z.coerce.number().int().min(0).default(1000),
 });
 
 const LoggingSchema = z.object({
@@ -142,10 +190,10 @@ const SecretEntityTypes = [
 const SecretsDetectionSchema = z.object({
   enabled: z.boolean().default(true),
   action: z.enum(["block", "mask", "route_local"]).default("mask"),
-  entities: z.array(z.enum(SecretEntityTypes)).default(["OPENSSH_PRIVATE_KEY", "PEM_PRIVATE_KEY"]),
+  entities: z.array(z.enum(SecretEntityTypes)).default([...SecretEntityTypes]),
   max_scan_chars: z.coerce.number().int().min(0).default(200000),
   log_detected_types: z.boolean().default(true),
-  scan_roles: z.array(z.string()).optional(),
+  scan_roles: scanRolesField,
 });
 
 const ConfigSchema = z
@@ -198,6 +246,8 @@ export type AnthropicProviderConfig = z.infer<typeof AnthropicProviderSchema>;
 export type CodexProviderConfig = z.infer<typeof CodexProviderSchema>;
 export type LocalProviderConfig = z.infer<typeof LocalProviderSchema>;
 export type MaskingConfig = z.infer<typeof MaskingSchema>;
+export type AllowlistPattern = z.infer<typeof AllowlistPatternSchema>;
+export type DenylistPattern = z.infer<typeof DenylistPatternSchema>;
 export type SecretsDetectionConfig = z.infer<typeof SecretsDetectionSchema>;
 export type ServerConfig = z.infer<typeof ServerSchema>;
 
