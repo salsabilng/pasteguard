@@ -97,7 +97,12 @@ def _quantize() -> bool:
 
 
 def load_model() -> None:
-    """Load the model once. Safe to call at startup or lazily."""
+    """Load the model once. Safe to call at startup or lazily.
+
+    Tries to use FP16 precision (50% memory reduction) if DETECTOR_FP16=1.
+    Falls back to default precision if the installed GLiNER version does not
+    support the dtype parameter (older versions used quantize=True).
+    """
     global _model
     if _model is not None:
         return
@@ -107,16 +112,22 @@ def load_model() -> None:
         from gliner import GLiNER
 
         use_fp16 = _quantize()
-        if use_fp16:
-            print("[DETECTOR] Loading model with FP16 quantization (50% memory reduction)")
 
-        _model = GLiNER.from_pretrained(
-            _model_name(),
-            quantize=use_fp16,
-        )
-
-        if use_fp16:
-            print("[DETECTOR] Model loaded with FP16 quantization")
+        # Try new API first (dtype parameter), fall back to old (quantize=True)
+        # for compatibility with older GLiNER versions.
+        try:
+            if use_fp16:
+                print("[DETECTOR] Loading model with FP16 precision (50% memory reduction)")
+                _model = GLiNER.from_pretrained(_model_name(), dtype="fp16")
+                print("[DETECTOR] Model loaded with FP16 precision")
+            else:
+                _model = GLiNER.from_pretrained(_model_name())
+        except (TypeError, ValueError) as e:
+            if use_fp16:
+                print(f"[DETECTOR] FP16 not supported, falling back to default precision: {e}")
+                _model = GLiNER.from_pretrained(_model_name())
+            else:
+                raise
 
 
 def detect_gliner(text: str, score_threshold: float = 0.0) -> list[Span]:
