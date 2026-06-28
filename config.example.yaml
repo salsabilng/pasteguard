@@ -69,13 +69,59 @@ masking:
 
   # Context enrichment: inject entity metadata into system prompts after PII masking
   # Helps the LLM understand what kind of information was redacted without exposing it
-  # context_enrichment:
-  #   enabled: false
-  #   system_prompt: |
-  #     The following placeholders represent redacted sensitive entities.
-  #     Use this metadata to understand context without needing original values.
-  #
-  #     {{entities}}
+  context_enrichment:
+    enabled: true
+    system_prompt: |
+      The following placeholders represent redacted sensitive entities.
+      Use this metadata to understand context without needing original values.
+
+      {{entities}}
+
+    # Per-entity templates (optional — overrides the default description)
+    # Available variables: {{length}}, {{word_count}}, {{type}}, {{score}},
+    #   {{domain}}, {{initials}}, {{prefix}}, {{suffix}}, {{char_set}},
+    #   {{slice:START:END}}
+    entities:
+      PERSON:
+        description: "a person's full name"
+        fields:
+          word_count: "{{word_count}}"
+          length: "{{length}}"
+          initials: "{{initials}}"
+      EMAIL_ADDRESS:
+        description: "an email address"
+        fields:
+          domain: "{{domain}}"
+          length: "{{length}}"
+      PHONE_NUMBER:
+        description: "a phone number"
+        fields:
+          length: "{{length}}"
+      CREDIT_CARD:
+        description: "a credit card number"
+        fields:
+          last_digits: "{{slice:-4:-1}}"
+          length: "{{length}}"
+      TV_MODEL:
+        description: "a TV model number"
+        fields:
+          length: "{{length}}"
+      TV_MODEL_WITH_SUFFIX:
+        description: "a TV model with suffix"
+        fields:
+          suffix: "{{slice:-4:-1}}"
+          length: "{{length}}"
+      PART_NUMBER:
+        description: "a part number"
+        fields:
+          prefix: "{{slice:0:3}}"
+          length: "{{length}}"
+
+    # Default template for entity types not listed above
+    default:
+      description: "{{type}} detected"
+      fields:
+        length: "{{length}}" 
 
 # PII Detection settings (detector service, /analyze contract)
 pii_detection:

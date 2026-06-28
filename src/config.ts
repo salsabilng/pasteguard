@@ -88,11 +88,18 @@ const DenylistPatternSchema = z
     validateRegexPattern(entry.pattern, entry.regex, ctx, "Invalid denylist regex pattern");
   });
 
+const EntityConfigSchema = z.object({
+  description: z.string(),
+  fields: z.record(z.string()).default({}),
+}).default({ description: '{{type}} detected', fields: {} });
+
 const ContextEnrichmentSchema = z.object({
   enabled: z.boolean().default(false),
   system_prompt: z.string().default(
     "The following placeholders represent redacted sensitive entities.\nUse this metadata to understand context without needing original values.\n\n{{entities}}"
   ),
+  entities: z.record(EntityConfigSchema).default({}),
+  default: EntityConfigSchema.default({ description: '{{type}} detected', fields: {} }),
 }).default({});
 
 const MaskingSchema = z.object({
