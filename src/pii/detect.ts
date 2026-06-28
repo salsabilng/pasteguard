@@ -296,7 +296,8 @@ export class PIIDetector {
         });
         if (response.ok) anyAvailable = true;
       } catch {
-        // Detector not available, continue checking others
+        // Detector not responding - likely busy with inference
+        // Don't log here to avoid spam; just continue checking others
       }
     }
     return anyAvailable;
