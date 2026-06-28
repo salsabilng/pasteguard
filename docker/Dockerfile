@@ -97,10 +97,18 @@ COPY config.example.yaml ./
 RUN useradd --uid 1000 --create-home --home-dir /home/pasteguard pasteguard \
     && mkdir -p /pasteguard/data && chown -R 1000:1000 /pasteguard
 
-COPY docker/supervisord.conf /etc/supervisor/conf.d/pasteguard.conf
+COPY docker/supervisord.conf.template /home/pasteguard/pasteguard.conf.template
+COPY docker/entrypoint.sh /home/pasteguard/entrypoint.sh
+RUN chmod +x /home/pasteguard/entrypoint.sh
 
 USER 1000
 ENV HOME=/home/pasteguard
+
+# Default to single detector for low-RAM devices (Pi 4).
+# Set DETECTOR_INSTANCES=2 for dual-detector round-robin.
+ENV DETECTOR_INSTANCES=1
+
+ENTRYPOINT ["/home/pasteguard/entrypoint.sh"]
 
 # The proxy talks to the in-container detector.
 ENV DETECTOR_URL=http://localhost:5002
@@ -110,4 +118,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/pasteguard.conf"]
+

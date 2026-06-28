@@ -19,7 +19,7 @@ priority=10
 
 [program:detector-2]
 command=uvicorn detector.app:app --host 127.0.0.1 --port 5003
-autostart=%(ENV_DETECTOR_INSTANCES)s>1
+autostart=__DETECTOR_2_AUTOSTART__
 autorestart=true
 startsecs=10
 startretries=3
