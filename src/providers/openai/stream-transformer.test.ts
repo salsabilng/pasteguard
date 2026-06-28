@@ -8,6 +8,7 @@ const defaultConfig: MaskingConfig = {
   marker_text: "[protected]",
   allowlist: [],
   denylist: [],
+  context_enrichment: { enabled: false, system_prompt: "" },
 };
 
 function createSSEStream(chunks: string[]): ReadableStream<Uint8Array> {

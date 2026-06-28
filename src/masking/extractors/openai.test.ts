@@ -204,7 +204,9 @@ describe("OpenAI Text Extractor", () => {
           "john@example.com": "[[EMAIL_ADDRESS_1]]",
         },
         counters: { PERSON: 1, EMAIL_ADDRESS: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = openaiExtractor.unmaskResponse(response, context);
 
@@ -230,7 +232,9 @@ describe("OpenAI Text Extractor", () => {
         mapping: { "[[PERSON_1]]": "John" },
         reverseMapping: { John: "[[PERSON_1]]" },
         counters: { PERSON: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = openaiExtractor.unmaskResponse(
         response,
@@ -265,7 +269,9 @@ describe("OpenAI Text Extractor", () => {
         mapping: { "[[PERSON_1]]": "John" },
         reverseMapping: { John: "[[PERSON_1]]" },
         counters: { PERSON: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = openaiExtractor.unmaskResponse(response, context);
 
@@ -292,7 +298,9 @@ describe("OpenAI Text Extractor", () => {
         mapping: {},
         reverseMapping: {},
         counters: {},
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = openaiExtractor.unmaskResponse(response, context);
 
@@ -325,7 +333,9 @@ describe("OpenAI Text Extractor", () => {
         mapping: { "[[PERSON_1]]": "John" },
         reverseMapping: { John: "[[PERSON_1]]" },
         counters: { PERSON: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = openaiExtractor.unmaskResponse(response, context);
       const content = result.choices[0].message.content as Array<{

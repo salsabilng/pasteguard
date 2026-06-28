@@ -597,7 +597,9 @@ describe("Anthropic Text Extractor", () => {
           "john@example.com": "[[EMAIL_ADDRESS_1]]",
         },
         counters: { PERSON: 1, EMAIL_ADDRESS: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = anthropicExtractor.unmaskResponse(response, context);
 
@@ -622,7 +624,9 @@ describe("Anthropic Text Extractor", () => {
         mapping: { "[[PERSON_1]]": "John" },
         reverseMapping: { John: "[[PERSON_1]]" },
         counters: { PERSON: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = anthropicExtractor.unmaskResponse(
         response,
@@ -652,7 +656,9 @@ describe("Anthropic Text Extractor", () => {
         mapping: { "[[PERSON_1]]": "Alice" },
         reverseMapping: { Alice: "[[PERSON_1]]" },
         counters: { PERSON: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = anthropicExtractor.unmaskResponse(response, context);
 
@@ -679,7 +685,9 @@ describe("Anthropic Text Extractor", () => {
         mapping: { "[[PERSON_1]]": "Bob" },
         reverseMapping: { Bob: "[[PERSON_1]]" },
         counters: { PERSON: 1 },
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = anthropicExtractor.unmaskResponse(response, context);
 
@@ -703,7 +711,9 @@ describe("Anthropic Text Extractor", () => {
         mapping: {},
         reverseMapping: {},
         counters: {},
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = anthropicExtractor.unmaskResponse(response, context);
 
@@ -730,7 +740,9 @@ describe("Anthropic Text Extractor", () => {
         mapping: {},
         reverseMapping: {},
         counters: {},
-      };
+        entityTypes: {},
+        scores: {},
+        };
 
       const result = anthropicExtractor.unmaskResponse(response, context);
 

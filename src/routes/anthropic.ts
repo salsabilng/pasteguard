@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { getConfig } from "../config";
 import type { PlaceholderContext } from "../masking/context";
 import { anthropicExtractor } from "../masking/extractors/anthropic";
+import { injectMetadataSystemMessage } from "../masking/context-enrichment";
 import { unmaskResponse as unmaskPIIResponse } from "../pii/mask";
 import { callAnthropic } from "../providers/anthropic/client";
 import { createAnthropicUnmaskingStream } from "../providers/anthropic/stream-transformer";
@@ -130,6 +131,14 @@ anthropicRoutes.post(
       const masked = maskPII(request, piiResult.detection, anthropicExtractor);
       request = masked.request;
       piiMaskingContext = masked.maskingContext;
+      if (config.masking.context_enrichment.enabled && piiMaskingContext) {
+        request = injectMetadataSystemMessage(
+          request,
+          piiMaskingContext,
+          config.masking.context_enrichment as any,
+          'anthropic',
+        );
+      }
       maskedContent = formatRequestForLog(request);
     } else if (secretsResult.masked) {
       maskedContent = formatRequestForLog(request);

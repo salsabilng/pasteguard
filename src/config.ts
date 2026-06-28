@@ -88,6 +88,13 @@ const DenylistPatternSchema = z
     validateRegexPattern(entry.pattern, entry.regex, ctx, "Invalid denylist regex pattern");
   });
 
+const ContextEnrichmentSchema = z.object({
+  enabled: z.boolean().default(false),
+  system_prompt: z.string().default(
+    "The following placeholders represent redacted sensitive entities.\nUse this metadata to understand context without needing original values.\n\n{{entities}}"
+  ),
+}).default({});
+
 const MaskingSchema = z.object({
   show_markers: z.boolean().default(false),
   marker_text: z.string().default("[protected]"),
@@ -96,6 +103,7 @@ const MaskingSchema = z.object({
     .default([])
     .transform((arr) => [...DEFAULT_ALLOWLIST, ...arr]),
   denylist: z.array(DenylistPatternSchema).default([]),
+  context_enrichment: ContextEnrichmentSchema,
 });
 
 const PhoneRegionSchema = z

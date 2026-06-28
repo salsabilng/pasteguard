@@ -5,6 +5,7 @@ import { proxy } from "hono/proxy";
 import { getConfig, type MaskingConfig } from "../config";
 import type { PlaceholderContext } from "../masking/context";
 import { openaiExtractor } from "../masking/extractors/openai";
+import { injectMetadataSystemMessage } from "../masking/context-enrichment";
 import { unmaskResponse as unmaskPIIResponse } from "../pii/mask";
 import { callLocal } from "../providers/local";
 import { callOpenAI, getOpenAIInfo, type ProviderResult } from "../providers/openai/client";
@@ -80,8 +81,17 @@ openaiRoutes.post(
     // Step 3: Process based on mode
     if (config.mode === "mask") {
       const piiMasked = maskPII(request, piiResult.detection, openaiExtractor);
+      let enrichedRequest = piiMasked.request;
+      if (config.masking.context_enrichment.enabled && piiMasked.maskingContext) {
+        enrichedRequest = injectMetadataSystemMessage(
+          enrichedRequest,
+          piiMasked.maskingContext,
+          config.masking.context_enrichment as any,
+          'openai',
+        );
+      }
       return sendToOpenAI(c, request, {
-        request: piiMasked.request,
+        request: enrichedRequest,
         piiResult,
         piiMaskingContext: piiMasked.maskingContext,
         secretsResult,

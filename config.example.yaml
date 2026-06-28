@@ -67,6 +67,16 @@ masking:
   #     type: CUSTOMER_ID
   #     regex: true
 
+  # Context enrichment: inject entity metadata into system prompts after PII masking
+  # Helps the LLM understand what kind of information was redacted without exposing it
+  # context_enrichment:
+  #   enabled: false
+  #   system_prompt: |
+  #     The following placeholders represent redacted sensitive entities.
+  #     Use this metadata to understand context without needing original values.
+  #
+  #     {{entities}}
+
 # PII Detection settings (detector service, /analyze contract)
 pii_detection:
   # URL of the detector service (see detector/). Defaults to localhost.

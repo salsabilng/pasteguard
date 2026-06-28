@@ -5,6 +5,10 @@ export interface PlaceholderContext {
   mapping: Record<string, string>;
   reverseMapping: Record<string, string>;
   counters: Record<string, number>;
+  /** Maps placeholder -> entity type */
+  entityTypes: Record<string, string>;
+  /** Maps placeholder -> confidence score */
+  scores: Record<string, number>;
 }
 
 export function createPlaceholderContext(): PlaceholderContext {
@@ -12,6 +16,8 @@ export function createPlaceholderContext(): PlaceholderContext {
     mapping: {},
     reverseMapping: {},
     counters: {},
+    entityTypes: {},
+    scores: {},
   };
 }
 
@@ -75,6 +81,10 @@ export function replaceWithPlaceholders<T extends Span>(
       placeholder = generatePlaceholder(getType(item), context);
       context.mapping[placeholder] = originalValue;
       context.reverseMapping[originalValue] = placeholder;
+      context.entityTypes[placeholder] = getType(item);
+      if ('score' in item) {
+        context.scores[placeholder] = (item as any).score;
+      }
     }
 
     itemPlaceholders.set(item, placeholder);
