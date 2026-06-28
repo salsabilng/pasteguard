@@ -285,19 +285,21 @@ export class PIIDetector {
   }
 
   async healthCheck(): Promise<boolean> {
-    // Check all detectors are healthy
+    // Check if ANY detector is available (not ALL)
+    // If one is busy/down, we can still serve via the others
+    let anyAvailable = false;
     for (const url of this.detectorUrls) {
       try {
         const response = await fetch(`${url}/health`, {
           method: "GET",
           signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
         });
-        if (!response.ok) return false;
+        if (response.ok) anyAvailable = true;
       } catch {
-        return false;
+        // Detector not available, continue checking others
       }
     }
-    return true;
+    return anyAvailable;
   }
 
   /**
