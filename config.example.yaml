@@ -71,10 +71,11 @@ masking:
 pii_detection:
   # URL of the detector service (see detector/). Defaults to localhost.
   # For dual-detector round-robin (high-throughput servers), use detector_urls:
-  #   detector_urls:
-  #     - http://localhost:5002
-  #     - http://localhost:5003
-  detector_url: ${DETECTOR_URL:-http://localhost:5002}
+  detector_urls:
+    - http://localhost:5002
+    - http://localhost:5003
+  # Or a single detector:
+  # detector_url: ${DETECTOR_URL:-http://localhost:5002}
 
   # Add regions only if you need national-format numbers; + numbers work globally.
   phone_regions: []

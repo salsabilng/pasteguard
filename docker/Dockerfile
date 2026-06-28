@@ -106,7 +106,7 @@ ENV HOME=/home/pasteguard
 
 # Default to single detector for low-RAM devices (Pi 4).
 # Set DETECTOR_INSTANCES=2 for dual-detector round-robin.
-ENV DETECTOR_INSTANCES=1
+ENV DETECTOR_INSTANCES=2
 
 ENTRYPOINT ["/home/pasteguard/entrypoint.sh"]
 

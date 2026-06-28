@@ -21,7 +21,7 @@ services:
     ports:
       - "${PASTEGUARD_PORT:-3000}:3000"
     environment:
-      - DETECTOR_INSTANCES=${DETECTOR_INSTANCES:-1}
+      - DETECTOR_INSTANCES=${DETECTOR_INSTANCES:-2}
     env_file:
       - path: .env
         required: false

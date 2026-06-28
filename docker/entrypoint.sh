@@ -2,7 +2,7 @@
 set -e
 
 # Default to 1 detector instance for low-RAM devices (Pi 4)
-DETECTOR_INSTANCES=${DETECTOR_INSTANCES:-1}
+DETECTOR_INSTANCES=${DETECTOR_INSTANCES:-2}
 
 if [ "$DETECTOR_INSTANCES" -ge 2 ]; then
     AUTOSTART_2="true"
