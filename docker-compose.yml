@@ -20,6 +20,8 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - "${PASTEGUARD_PORT:-3000}:3000"
+    environment:
+      - DETECTOR_INSTANCES=${DETECTOR_INSTANCES:-1}
     env_file:
       - path: .env
         required: false

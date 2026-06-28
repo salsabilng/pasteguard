@@ -91,6 +91,11 @@ def _model_name() -> str:
     )
 
 
+def _quantize() -> bool:
+    """Return True if FP16 quantization should be used (halves memory)."""
+    return os.environ.get("DETECTOR_FP16", "1").lower() in ("1", "true", "yes")
+
+
 def load_model() -> None:
     """Load the model once. Safe to call at startup or lazily."""
     global _model
@@ -101,7 +106,17 @@ def load_model() -> None:
             return
         from gliner import GLiNER
 
-        _model = GLiNER.from_pretrained(_model_name())
+        use_fp16 = _quantize()
+        if use_fp16:
+            print("[DETECTOR] Loading model with FP16 quantization (50% memory reduction)")
+
+        _model = GLiNER.from_pretrained(
+            _model_name(),
+            quantize=use_fp16,
+        )
+
+        if use_fp16:
+            print("[DETECTOR] Model loaded with FP16 quantization")
 
 
 def detect_gliner(text: str, score_threshold: float = 0.0) -> list[Span]:

@@ -57,6 +57,9 @@ RUN ok=""; for i in 1 2 3; do \
     done; \
     [ -n "$ok" ] && chown -R 1000:1000 /opt/models || exit 1
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# FP16 quantization halves model memory (critical for Pi/low-RAM devices).
+# Set DETECTOR_FP16=0 to disable.
+ENV DETECTOR_FP16=1
 
 EXPOSE 5002
 HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=5 \

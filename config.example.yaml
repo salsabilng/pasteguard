@@ -69,14 +69,12 @@ masking:
 
 # PII Detection settings (detector service, /analyze contract)
 pii_detection:
-  # URLs of the detector service (see detector/). Round-robin distributes
-  # requests across multiple instances for parallel PII analysis.
-  # Single instance (default):
-  #   detector_url: ${DETECTOR_URL:-http://localhost:5002}
-  # Dual instances (for higher throughput):
-  detector_urls:
-    - http://localhost:5002
-    - http://localhost:5003
+  # URL of the detector service (see detector/). Defaults to localhost.
+  # For dual-detector round-robin (high-throughput servers), use detector_urls:
+  #   detector_urls:
+  #     - http://localhost:5002
+  #     - http://localhost:5003
+  detector_url: ${DETECTOR_URL:-http://localhost:5002}
 
   # Add regions only if you need national-format numbers; + numbers work globally.
   phone_regions: []
