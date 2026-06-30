@@ -47,7 +47,10 @@ RUN pip install --no-cache-dir /srv/detector
 
 # Bake the default model into a location the all-in-one runtime user (UID 1000)
 # can also read, and force offline use at runtime (no network needed for models).
-ENV DETECTOR_MODEL=urchade/gliner_multi_pii-v1
+# Default: knowledgator/gliner-pii-edge-v1.0 (181MB, edge-optimized, PII-specific)
+# To change: rebuild with --build-arg DETECTOR_MODEL=<model_name>
+ARG DETECTOR_MODEL=knowledgator/gliner-pii-edge-v1.0
+ENV DETECTOR_MODEL=${DETECTOR_MODEL}
 ENV HF_HOME=/opt/models
 # Retry the fetch: under multi-arch (QEMU) builds a transient HF rate-limit or
 # network blip should not fail the whole image build.
