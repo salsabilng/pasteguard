@@ -32,22 +32,56 @@ PER_LABEL_FLOOR = {
     # "location" reading misses; emitted as LOCATION (see _LABEL_TO_TYPE).
     "address": _floor("address", 0.80),
 }
-# Labels the request `score_threshold` may raise (high-volume, deployment-tunable).
-_TUNABLE = {"person", "location", "address"}
-
-_LABELS = list(PER_LABEL_FLOOR)
-_LABEL_TO_TYPE = {
+# Labels for GLiNER prediction.
+# Default: person/location detection for the urchade/gliner_multi_pii-v1 model
+# Edge model (knowledgator/gliner-pii-edge-v1.0) uses different labels.
+# Set DETECTOR_LABELS env var to override (comma-separated).
+_DEFAULT_LABELS = ["person", "location", "address"]
+_DEFAULT_SUPPRESS = ["customer", "role"]
+_DEFAULT_LABEL_TO_TYPE = {
     "person": PERSON,
     "location": LOCATION,
-    # Street addresses are a kind of location for masking purposes; emit them as
-    # LOCATION so the response entity set stays the Presidio drop-in set.
     "address": LOCATION,
 }
-# Suppressor labels: predicted but never emitted. They give GLiNER a competing
-# reading for generic role nouns (client/customer/...) in any language, so it
-# tags those instead of "person" — no per-language denylist needed.
-_SUPPRESS_LABELS = ["customer", "role"]
-_PREDICT_LABELS = _LABELS + _SUPPRESS_LABELS
+
+# Edge model labels (knowledgator/gliner-pii-edge-v1.0)
+_EDGE_LABELS = ["name", "email address", "phone number", "ip address",
+                "location address", "location city", "location country"]
+_EDGE_SUPPRESS = []
+_EDGE_LABEL_TO_TYPE = {
+    "name": PERSON,
+    "location address": LOCATION,
+    "location city": LOCATION,
+    "location country": LOCATION,
+    "location street": LOCATION,
+}
+
+def _detect_model_type() -> str:
+    """Detect model type from DETECTOR_MODEL env var."""
+    model_name = os.environ.get("DETECTOR_MODEL", "").lower()
+    if "edge" in model_name or "knowledgator" in model_name:
+        return "edge"
+    return "default"
+
+_model_type = _detect_model_type()
+
+# Use model-specific labels unless DETECTOR_LABELS is set
+_custom_labels = os.environ.get("DETECTOR_LABELS", "")
+if _custom_labels:
+    _PREDICT_LABELS = [l.strip() for l in _custom_labels.split(",") if l.strip()]
+    _LABEL_TO_TYPE = {l: PERSON for l in _PREDICT_LABELS}  # Fallback: all as PERSON
+    _SUPPRESS_LABELS = []
+elif _model_type == "edge":
+    _PREDICT_LABELS = _EDGE_LABELS
+    _LABEL_TO_TYPE = _EDGE_LABEL_TO_TYPE
+    _SUPPRESS_LABELS = _EDGE_SUPPRESS
+else:
+    _PREDICT_LABELS = _DEFAULT_LABELS + _DEFAULT_SUPPRESS
+    _LABEL_TO_TYPE = _DEFAULT_LABEL_TO_TYPE
+    _SUPPRESS_LABELS = _DEFAULT_SUPPRESS
+
+# Labels the request score_threshold may raise (high-volume, deployment-tunable).
+_TUNABLE = set(_LABEL_TO_TYPE.keys()) - {"address"}
 # Capture candidates below every floor so per-label filtering has them.
 _PREDICT_FLOOR = min(PER_LABEL_FLOOR.values()) - 0.1
 
