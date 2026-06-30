@@ -168,6 +168,10 @@ def detect_gliner(text: str, score_threshold: float = 0.0) -> list[Span]:
     if not text:
         return []
     load_model()
+
+    # If GLiNER is disabled, return empty (deterministic-only mode)
+    if _model is None:
+        return []
     n = len(text)
     # Run each window, shift spans back to absolute offsets, dedupe overlaps
     # (same span+label) keeping the max score.

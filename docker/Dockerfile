@@ -60,6 +60,10 @@ ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 # FP16 quantization halves model memory (critical for Pi/low-RAM devices).
 # Set DETECTOR_FP16=0 to disable.
 ENV DETECTOR_FP16=1
+# Set DETECTOR_GLINER=0 for deterministic-only mode (no ML, very fast).
+# Skips person/location detection but keeps email, phone, credit card,
+# IBAN, TV_MODEL, PART_NUMBER detection.
+ENV DETECTOR_GLINER=1
 
 EXPOSE 5002
 HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=5 \
